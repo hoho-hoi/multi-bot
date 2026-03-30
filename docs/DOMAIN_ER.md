@@ -57,6 +57,9 @@ erDiagram
     string documentSetId PK "storage_scope: GlobalPersistent / docs snapshot identifier"
     string versionLabel "storage_scope: GlobalPersistent / branch or commit label"
     string requirementPath "storage_scope: GlobalPersistent / docs/REQUIREMENT.md"
+    string domainErPath "storage_scope: GlobalPersistent / docs/DOMAIN_ER.md"
+    string interactionFlowPath "storage_scope: GlobalPersistent / docs/INTERACTION_FLOW.md"
+    string architectureDiagramPath "storage_scope: GlobalPersistent / docs/ARCHITECTURE_DIAGRAM.md"
     string useCasePath "storage_scope: GlobalPersistent / docs/USE_CASES.md"
   }
 
