@@ -107,6 +107,14 @@ class ImplementationIssueCreationStatus(StrEnum):
     UNSUPPORTED_STATE = "UNSUPPORTED_STATE"
 
 
+class EngineerJobInputStatus(StrEnum):
+    """Enumerates outcomes for preparing the initial engineer job input."""
+
+    READY = "READY"
+    INPUT_REQUIRED = "INPUT_REQUIRED"
+    UNSUPPORTED_STATE = "UNSUPPORTED_STATE"
+
+
 class UseCaseIdentifier(StrEnum):
     """Enumerates supported use-case identifiers from `docs/USE_CASES.md`."""
 
@@ -1022,6 +1030,7 @@ class ImplementationIssueCreatePayload:
     """Represents the typed payload required to create an implementation issue.
 
     Attributes:
+        target_use_case: Use case that the created implementation issue advances.
         issue_title: Suggested GitHub issue title.
         issue_overview: Overview that should appear in the issue body.
         acceptance_criteria: Verifiable outcomes copied into the issue body.
@@ -1029,6 +1038,7 @@ class ImplementationIssueCreatePayload:
         target_state: Workflow state reached once the implementation issue batch is ready.
     """
 
+    target_use_case: UseCaseIdentifier
     issue_title: str
     issue_overview: str
     acceptance_criteria: tuple[str, ...]
@@ -1038,6 +1048,8 @@ class ImplementationIssueCreatePayload:
     def __post_init__(self) -> None:
         """Validates the implementation issue creation payload."""
 
+        if not isinstance(self.target_use_case, UseCaseIdentifier):
+            raise ValueError("target_use_case must be a UseCaseIdentifier value.")
         if not self.issue_title.strip():
             raise ValueError("issue_title must not be empty.")
         if not self.issue_overview.strip():
@@ -1110,6 +1122,152 @@ class ImplementationIssueCreationResult:
             if self.next_state is not RequirementDiscoverySessionState.MILESTONE_PLANNING:
                 raise ValueError(
                     "next_state must be STATE_MILESTONE_PLANNING when status is INPUT_REQUIRED."
+                )
+            return
+
+        if self.missing_information_items:
+            raise ValueError(
+                "missing_information_items must be empty when status is UNSUPPORTED_STATE."
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class EngineerExecutionFocus:
+    """Represents the initial execution focus for one engineer job.
+
+    Attributes:
+        use_case_identifier: Engineer use case that the job must execute.
+        focus_summary: Human-readable summary of the first implementation objective.
+        acceptance_criteria: Acceptance criteria preserved from the implementation issue.
+        single_pull_request_scope: Explicit boundary for the first implementation slice.
+    """
+
+    use_case_identifier: UseCaseIdentifier
+    focus_summary: str
+    acceptance_criteria: tuple[str, ...]
+    single_pull_request_scope: str
+
+    def __post_init__(self) -> None:
+        """Validates the initial engineer execution focus."""
+
+        if self.use_case_identifier is not UseCaseIdentifier.IMPLEMENT_ISSUE_WITH_ENGINEER:
+            raise ValueError("use_case_identifier must be UC_IMPLEMENT_ISSUE_WITH_ENGINEER.")
+        if not self.focus_summary.strip():
+            raise ValueError("focus_summary must not be empty.")
+        if not self.acceptance_criteria:
+            raise ValueError("acceptance_criteria must not be empty.")
+        if any(
+            not acceptance_criterion.strip() for acceptance_criterion in self.acceptance_criteria
+        ):
+            raise ValueError("acceptance_criteria must not contain empty values.")
+        if len(set(self.acceptance_criteria)) != len(self.acceptance_criteria):
+            raise ValueError("acceptance_criteria must not contain duplicate values.")
+        if not self.single_pull_request_scope.strip():
+            raise ValueError("single_pull_request_scope must not be empty.")
+
+
+@dataclass(frozen=True, slots=True)
+class EngineerJobInput:
+    """Represents the strict input required to start an engineer job.
+
+    Attributes:
+        issue_title: Title of the backlog-ready implementation issue.
+        issue_overview: Overview that explains the implementation slice.
+        acceptance_criteria: Verifiable outcomes that the engineer must satisfy.
+        single_pull_request_scope: Explicit boundary that keeps execution within one PR.
+        target_use_case: Use case that this engineer job must execute.
+
+    Example:
+        engineer_job_input = EngineerJobInput(
+            issue_title="Implement engineer job input builder",
+            issue_overview="Build the strict engineer job input model.",
+            acceptance_criteria=("Return a strict engineer job input model.",),
+            single_pull_request_scope="Limit the work to one engineer job input model.",
+            target_use_case=UseCaseIdentifier.IMPLEMENT_ISSUE_WITH_ENGINEER,
+        )
+        execution_focus = engineer_job_input.build_initial_execution_focus()
+        assert execution_focus.use_case_identifier is (
+            UseCaseIdentifier.IMPLEMENT_ISSUE_WITH_ENGINEER
+        )
+    """
+
+    issue_title: str
+    issue_overview: str
+    acceptance_criteria: tuple[str, ...]
+    single_pull_request_scope: str
+    target_use_case: UseCaseIdentifier
+
+    def __post_init__(self) -> None:
+        """Validates the engineer job input."""
+
+        if not self.issue_title.strip():
+            raise ValueError("issue_title must not be empty.")
+        if not self.issue_overview.strip():
+            raise ValueError("issue_overview must not be empty.")
+        if not self.acceptance_criteria:
+            raise ValueError("acceptance_criteria must not be empty.")
+        if any(
+            not acceptance_criterion.strip() for acceptance_criterion in self.acceptance_criteria
+        ):
+            raise ValueError("acceptance_criteria must not contain empty values.")
+        if len(set(self.acceptance_criteria)) != len(self.acceptance_criteria):
+            raise ValueError("acceptance_criteria must not contain duplicate values.")
+        if not self.single_pull_request_scope.strip():
+            raise ValueError("single_pull_request_scope must not be empty.")
+        if self.target_use_case is not UseCaseIdentifier.IMPLEMENT_ISSUE_WITH_ENGINEER:
+            raise ValueError("target_use_case must be UC_IMPLEMENT_ISSUE_WITH_ENGINEER.")
+
+    def build_initial_execution_focus(self) -> EngineerExecutionFocus:
+        """Builds the initial engineer execution focus from this input model."""
+
+        return EngineerExecutionFocus(
+            use_case_identifier=self.target_use_case,
+            focus_summary=self.issue_overview,
+            acceptance_criteria=self.acceptance_criteria,
+            single_pull_request_scope=self.single_pull_request_scope,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class EngineerJobInputResult:
+    """Represents whether an engineer job can start from one implementation issue payload.
+
+    Attributes:
+        status: High-level outcome for caller-side branching.
+        summary_message: Human-readable status summary for orchestration.
+        missing_information_items: Missing inputs required before the job can start.
+        engineer_job_input: Strict engineer job input when status is `READY`.
+    """
+
+    status: EngineerJobInputStatus
+    summary_message: str
+    missing_information_items: tuple[str, ...] = ()
+    engineer_job_input: EngineerJobInput | None = None
+
+    def __post_init__(self) -> None:
+        """Validates result consistency."""
+
+        if not self.summary_message.strip():
+            raise ValueError("summary_message must not be empty.")
+        if any(not missing_item.strip() for missing_item in self.missing_information_items):
+            raise ValueError("missing_information_items must not contain empty values.")
+        if len(set(self.missing_information_items)) != len(self.missing_information_items):
+            raise ValueError("missing_information_items must not contain duplicate values.")
+
+        if self.status is EngineerJobInputStatus.READY:
+            if self.engineer_job_input is None:
+                raise ValueError("engineer_job_input must be provided when status is READY.")
+            if self.missing_information_items:
+                raise ValueError("missing_information_items must be empty when status is READY.")
+            return
+
+        if self.engineer_job_input is not None:
+            raise ValueError("engineer_job_input must be empty unless status is READY.")
+
+        if self.status is EngineerJobInputStatus.INPUT_REQUIRED:
+            if not self.missing_information_items:
+                raise ValueError(
+                    "missing_information_items must not be empty when status is INPUT_REQUIRED."
                 )
             return
 
@@ -1985,6 +2143,7 @@ def build_implementation_issue_creation_result(
 
     issue_create_payloads = tuple(
         ImplementationIssueCreatePayload(
+            target_use_case=implementation_issue_draft.target_use_case,
             issue_title=implementation_issue_draft.issue_title,
             issue_overview=implementation_issue_draft.issue_summary,
             acceptance_criteria=implementation_issue_draft.acceptance_criteria,
@@ -2001,6 +2160,57 @@ def build_implementation_issue_creation_result(
         ),
         next_state=RequirementDiscoverySessionState.IMPLEMENTATION_BACKLOG_READY,
         issue_create_payloads=issue_create_payloads,
+    )
+
+
+def build_engineer_job_input_result(
+    issue_create_payload: ImplementationIssueCreatePayload | None,
+) -> EngineerJobInputResult:
+    """Builds the strict engineer job input from one backlog-ready issue payload.
+
+    Args:
+        issue_create_payload: One implementation issue payload prepared for backlog-ready state.
+
+    Returns:
+        A typed result describing whether an engineer job can start immediately.
+
+    Example:
+        result = build_engineer_job_input_result(issue_create_payload)
+        if result.status is EngineerJobInputStatus.READY:
+            assert result.engineer_job_input is not None
+    """
+
+    if issue_create_payload is None:
+        return EngineerJobInputResult(
+            status=EngineerJobInputStatus.INPUT_REQUIRED,
+            summary_message=(
+                "An implementation issue creation payload is required before the engineer "
+                "job can start."
+            ),
+            missing_information_items=("implementation issue create payload",),
+        )
+
+    if issue_create_payload.target_use_case is not UseCaseIdentifier.IMPLEMENT_ISSUE_WITH_ENGINEER:
+        return EngineerJobInputResult(
+            status=EngineerJobInputStatus.UNSUPPORTED_STATE,
+            summary_message=(
+                "Engineer job input is not supported for use case "
+                f"{issue_create_payload.target_use_case.value}."
+            ),
+        )
+
+    return EngineerJobInputResult(
+        status=EngineerJobInputStatus.READY,
+        summary_message=(
+            "Prepared the strict engineer job input for the backlog-ready implementation issue."
+        ),
+        engineer_job_input=EngineerJobInput(
+            issue_title=issue_create_payload.issue_title,
+            issue_overview=issue_create_payload.issue_overview,
+            acceptance_criteria=issue_create_payload.acceptance_criteria,
+            single_pull_request_scope=issue_create_payload.single_pull_request_scope,
+            target_use_case=issue_create_payload.target_use_case,
+        ),
     )
 
 
