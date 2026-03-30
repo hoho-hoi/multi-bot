@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = []
 
-[project.optional-dependencies]
+[dependency-groups]
 dev = ["mypy", "pytest", "ruff"]
 
 [tool.setuptools]
@@ -21,6 +21,9 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.uv]
+default-groups = ["dev"]
 
 [tool.ruff]
 target-version = "py312"
