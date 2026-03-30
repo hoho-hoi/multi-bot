@@ -103,6 +103,25 @@ def test_build_implementation_blocker_result_requires_input_values() -> None:
     )
 
 
+def test_build_implementation_blocker_result_rejects_unsupported_state() -> None:
+    session_summary = RequirementDiscoverySessionSummary(
+        issue_contract=create_requirement_issue_contract(),
+        current_state=RequirementDiscoverySessionState.IMPLEMENTATION_BACKLOG_READY,
+        latest_prompt_summary="Engineer has not started the implementation job yet.",
+    )
+
+    result = build_implementation_blocker_result(
+        session_summary=session_summary,
+        engineer_job_input=create_engineer_job_input(),
+        blocker_summary="The blocker result should not be created before the engineer job runs.",
+    )
+
+    assert result.status is ImplementationBlockerStatus.UNSUPPORTED_STATE
+    assert result.next_state is RequirementDiscoverySessionState.IMPLEMENTATION_BACKLOG_READY
+    assert result.implementation_blocker_draft is None
+    assert result.missing_information_items == ()
+
+
 def test_build_user_decision_escalation_result_returns_ready_draft() -> None:
     implementation_blocker_result = build_implementation_blocker_result(
         session_summary=RequirementDiscoverySessionSummary(
@@ -143,6 +162,38 @@ def test_build_user_decision_escalation_result_returns_ready_draft() -> None:
         result.user_decision_escalation_draft.comment_body_draft.casefold()
     )
     assert "reduce scope" in result.user_decision_escalation_draft.comment_body_draft.casefold()
+
+
+def test_build_user_decision_escalation_result_rejects_unsupported_state() -> None:
+    implementation_blocker_result = build_implementation_blocker_result(
+        session_summary=RequirementDiscoverySessionSummary(
+            issue_contract=create_requirement_issue_contract(),
+            current_state=RequirementDiscoverySessionState.ENGINEER_JOB_RUNNING,
+            latest_prompt_summary="Engineer found a missing workflow state.",
+        ),
+        engineer_job_input=create_engineer_job_input(),
+        blocker_summary=(
+            "The current contracts do not include the state required to finalize the manager "
+            "handoff after an implementation blocker."
+        ),
+    )
+    session_summary = RequirementDiscoverySessionSummary(
+        issue_contract=create_requirement_issue_contract(),
+        current_state=RequirementDiscoverySessionState.ENGINEER_JOB_RUNNING,
+        latest_prompt_summary="Manager has not moved the workflow into blocked state yet.",
+    )
+
+    result = build_user_decision_escalation_result(
+        session_summary=session_summary,
+        implementation_blocker_result=implementation_blocker_result,
+        escalation_summary="Manager still needs a blocked workflow state before escalating.",
+        requested_user_input="Wait to ask the user until the blocker has been formally reported.",
+    )
+
+    assert result.status is UserDecisionEscalationStatus.UNSUPPORTED_STATE
+    assert result.next_state is RequirementDiscoverySessionState.ENGINEER_JOB_RUNNING
+    assert result.user_decision_escalation_draft is None
+    assert result.missing_information_items == ()
 
 
 def test_build_user_decision_escalation_result_requires_input_values() -> None:
