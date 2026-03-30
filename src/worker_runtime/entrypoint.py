@@ -2,6 +2,8 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from shared_contracts import (
+    EngineerExecutionFocus,
+    EngineerExecutionWorkItemContract,
     IssueWorkItemContract,
     ProviderName,
     RequirementDiscoverySessionState,
@@ -62,6 +64,15 @@ class RequirementDiscoveryBootstrapFailureCode(StrEnum):
     UNSUPPORTED_STATE = "UNSUPPORTED_STATE"
 
 
+class EngineerExecutionBootstrapFailureCode(StrEnum):
+    """Enumerates failure categories for engineer execution bootstrap."""
+
+    INVALID_INPUT = "INVALID_INPUT"
+    UNSUPPORTED_ROLE = "UNSUPPORTED_ROLE"
+    UNSUPPORTED_PROVIDER = "UNSUPPORTED_PROVIDER"
+    UNSUPPORTED_STATE = "UNSUPPORTED_STATE"
+
+
 @dataclass(frozen=True, slots=True)
 class RequirementDiscoveryBootstrapSuccess:
     """Represents a successful worker-runtime bootstrap response.
@@ -102,6 +113,83 @@ class RequirementDiscoveryBootstrapFailure:
 
 RequirementDiscoveryBootstrapResult = (
     RequirementDiscoveryBootstrapSuccess | RequirementDiscoveryBootstrapFailure
+)
+
+
+@dataclass(frozen=True, slots=True)
+class EngineerBlockerReportingPolicy:
+    """Represents how Engineer should report an implementation blocker.
+
+    Attributes:
+        current_state: Workflow state where the engineer job is currently running.
+        next_state_on_blocker: Workflow state to transition into after blocker reporting.
+        escalation_target_role: Role that should review the blocker report next.
+        required_information_items: Required inputs for a valid blocker report.
+    """
+
+    current_state: RequirementDiscoverySessionState
+    next_state_on_blocker: RequirementDiscoverySessionState
+    escalation_target_role: WorkerRoleName
+    required_information_items: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        """Validates blocker reporting policy consistency."""
+
+        if self.current_state is not RequirementDiscoverySessionState.ENGINEER_JOB_RUNNING:
+            raise ValueError("current_state must be STATE_ENGINEER_JOB_RUNNING.")
+        if (
+            self.next_state_on_blocker
+            is not RequirementDiscoverySessionState.IMPLEMENTATION_BLOCKED
+        ):
+            raise ValueError("next_state_on_blocker must be STATE_IMPLEMENTATION_BLOCKED.")
+        if self.escalation_target_role is not WorkerRoleName.MANAGER:
+            raise ValueError("escalation_target_role must be manager.")
+        if not self.required_information_items:
+            raise ValueError("required_information_items must not be empty.")
+        if any(not required_item.strip() for required_item in self.required_information_items):
+            raise ValueError("required_information_items must not contain empty values.")
+        if len(set(self.required_information_items)) != len(self.required_information_items):
+            raise ValueError("required_information_items must not contain duplicate values.")
+
+
+@dataclass(frozen=True, slots=True)
+class EngineerExecutionBootstrapSuccess:
+    """Represents a successful engineer execution bootstrap response.
+
+    Attributes:
+        work_item_contract: Shared payload received from control-plane.
+        current_state: Current workflow state observed by worker-runtime.
+        execution_focus: Initial implementation focus for the engineer job.
+        blocker_reporting_policy: Typed guidance for reporting blockers safely.
+        engineer_response_message: Minimal Engineer-facing response text.
+    """
+
+    work_item_contract: EngineerExecutionWorkItemContract
+    current_state: RequirementDiscoverySessionState
+    execution_focus: EngineerExecutionFocus
+    blocker_reporting_policy: EngineerBlockerReportingPolicy
+    engineer_response_message: str
+
+
+@dataclass(frozen=True, slots=True)
+class EngineerExecutionBootstrapFailure:
+    """Represents an explicit engineer bootstrap failure for caller-side branching.
+
+    Attributes:
+        current_state: Current workflow state provided by the caller.
+        failure_code: Stable classification for safe failure handling.
+        error_message: Human-readable failure reason.
+        is_retryable: Whether retrying automatically is safe.
+    """
+
+    current_state: RequirementDiscoverySessionState
+    failure_code: EngineerExecutionBootstrapFailureCode
+    error_message: str
+    is_retryable: bool
+
+
+EngineerExecutionBootstrapResult = (
+    EngineerExecutionBootstrapSuccess | EngineerExecutionBootstrapFailure
 )
 
 
@@ -158,6 +246,87 @@ def execute_requirement_discovery_work_item(
             "discovery bootstrap."
         ),
         is_retryable=False,
+    )
+
+
+def execute_engineer_execution_work_item(
+    *,
+    work_item_contract: EngineerExecutionWorkItemContract | None,
+    current_state: RequirementDiscoverySessionState,
+) -> EngineerExecutionBootstrapResult:
+    """Executes the minimal worker-runtime bootstrap for engineer execution.
+
+    Args:
+        work_item_contract: Shared engineer work item prepared by the control-plane.
+        current_state: Current workflow state observed before execution starts.
+
+    Returns:
+        A success result with an Engineer-facing bootstrap response, or a failure
+        result that the caller can inspect for safe branching.
+    """
+
+    if work_item_contract is None:
+        return EngineerExecutionBootstrapFailure(
+            current_state=current_state,
+            failure_code=EngineerExecutionBootstrapFailureCode.INVALID_INPUT,
+            error_message="work_item_contract must be provided for engineer execution bootstrap.",
+            is_retryable=False,
+        )
+
+    if work_item_contract.role_name is not WorkerRoleName.ENGINEER:
+        return EngineerExecutionBootstrapFailure(
+            current_state=current_state,
+            failure_code=EngineerExecutionBootstrapFailureCode.UNSUPPORTED_ROLE,
+            error_message=(
+                "role_name "
+                f"{work_item_contract.role_name.value} is not supported for engineer "
+                "execution bootstrap."
+            ),
+            is_retryable=False,
+        )
+
+    if work_item_contract.provider_name is not ProviderName.CURSOR:
+        return EngineerExecutionBootstrapFailure(
+            current_state=current_state,
+            failure_code=EngineerExecutionBootstrapFailureCode.UNSUPPORTED_PROVIDER,
+            error_message=(
+                "provider_name "
+                f"{work_item_contract.provider_name.value} is not supported for engineer "
+                "execution bootstrap."
+            ),
+            is_retryable=False,
+        )
+
+    if current_state is not RequirementDiscoverySessionState.ENGINEER_JOB_RUNNING:
+        return EngineerExecutionBootstrapFailure(
+            current_state=current_state,
+            failure_code=EngineerExecutionBootstrapFailureCode.UNSUPPORTED_STATE,
+            error_message=(
+                "current_state "
+                f"{current_state.value} is not supported for engineer execution bootstrap."
+            ),
+            is_retryable=False,
+        )
+
+    issue_work_item_contract = work_item_contract.issue_work_item_contract
+    blocker_reporting_policy = EngineerBlockerReportingPolicy(
+        current_state=RequirementDiscoverySessionState.ENGINEER_JOB_RUNNING,
+        next_state_on_blocker=RequirementDiscoverySessionState.IMPLEMENTATION_BLOCKED,
+        escalation_target_role=WorkerRoleName.MANAGER,
+        required_information_items=("implementation blocker summary",),
+    )
+    engineer_response_message = (
+        "Engineer bootstrap is ready for issue "
+        f"#{issue_work_item_contract.issue_number}, '{issue_work_item_contract.issue_title}'. "
+        "Follow the execution focus, satisfy each acceptance criterion, and report blockers "
+        "to Manager with the required summary when implementation cannot proceed safely."
+    )
+    return EngineerExecutionBootstrapSuccess(
+        work_item_contract=work_item_contract,
+        current_state=current_state,
+        execution_focus=work_item_contract.execution_focus,
+        blocker_reporting_policy=blocker_reporting_policy,
+        engineer_response_message=engineer_response_message,
     )
 
 
