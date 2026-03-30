@@ -5,6 +5,7 @@ from shared_contracts.requirement_discovery_contract import (
     RequirementCommentContract,
     RequirementDiscoverySessionState,
     RequirementDiscoverySessionSummary,
+    RequirementDiscoveryWorkItemContract,
     RequirementIssueContract,
     RequirementRepositoryContract,
 )
@@ -15,6 +16,7 @@ __all__ = [
     "RequirementCommentContract",
     "RequirementDiscoverySessionState",
     "RequirementDiscoverySessionSummary",
+    "RequirementDiscoveryWorkItemContract",
     "RequirementIssueContract",
     "RequirementRepositoryContract",
 ]

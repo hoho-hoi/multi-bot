@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from enum import StrEnum
 
-from shared_contracts.issue_contract import RepositoryReference
+from shared_contracts.issue_contract import IssueWorkItemContract, RepositoryReference
 
 
 class RequirementDiscoverySessionState(StrEnum):
@@ -134,3 +134,26 @@ class RequirementDiscoverySessionSummary:
             issue_contract=issue_contract,
             current_state=RequirementDiscoverySessionState.ISSUE_READY,
         )
+
+
+@dataclass(frozen=True, slots=True)
+class RequirementDiscoveryWorkItemContract:
+    """Represents worker-runtime input for requirement discovery orchestration.
+
+    Attributes:
+        issue_work_item_contract: Minimal issue payload understood by worker-runtime.
+        session_summary: Requirement discovery session snapshot to execute from.
+    """
+
+    issue_work_item_contract: IssueWorkItemContract
+    session_summary: RequirementDiscoverySessionSummary
+
+    def __post_init__(self) -> None:
+        """Validates that the work item and session refer to the same issue."""
+
+        work_item_identifier = self.issue_work_item_contract.to_issue_identifier()
+        session_issue_identifier = self.session_summary.issue_contract.to_issue_identifier()
+        if work_item_identifier != session_issue_identifier:
+            raise ValueError(
+                "issue_work_item_contract must reference the same issue as session_summary."
+            )
