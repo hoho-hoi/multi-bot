@@ -62,6 +62,33 @@ class RequirementPullRequestOpenStatus(StrEnum):
     UNSUPPORTED_STATE = "UNSUPPORTED_STATE"
 
 
+class ManagerRequirementReviewInputStatus(StrEnum):
+    """Enumerates outcomes for manager requirement review input preparation."""
+
+    READY = "READY"
+    INPUT_REQUIRED = "INPUT_REQUIRED"
+    UNSUPPORTED_STATE = "UNSUPPORTED_STATE"
+
+
+class ManagerRequirementReviewCycleTrigger(StrEnum):
+    """Enumerates events that can start another manager review cycle."""
+
+    PULL_REQUEST_OPENED = "pull_request_opened"
+    PULL_REQUEST_UPDATED = "pull_request_updated"
+    CHANGES_PUSHED = "changes_pushed"
+
+
+class ManagerRequirementReviewFocusArea(StrEnum):
+    """Enumerates minimal review viewpoints for requirement document consistency."""
+
+    REQUIREMENT_OVERVIEW = "REQUIREMENT_OVERVIEW"
+    DOMAIN_MODEL_ALIGNMENT = "DOMAIN_MODEL_ALIGNMENT"
+    INTERACTION_AND_USE_CASE_ALIGNMENT = "INTERACTION_AND_USE_CASE_ALIGNMENT"
+    ARCHITECTURE_ALIGNMENT = "ARCHITECTURE_ALIGNMENT"
+    OPEN_DECISION_HANDLING = "OPEN_DECISION_HANDLING"
+    DOCUMENT_CROSS_CHECK = "DOCUMENT_CROSS_CHECK"
+
+
 @dataclass(frozen=True, slots=True)
 class RequirementRepositoryContract:
     """Represents repository metadata required for requirement discovery.
@@ -382,6 +409,129 @@ class RequirementPullRequestOpenResult:
 
 
 @dataclass(frozen=True, slots=True)
+class ManagerRequirementReviewCycleContext:
+    """Represents the review-cycle metadata for manager requirement review.
+
+    Attributes:
+        review_round_number: Positive review round for the current requirement PR.
+        review_cycle_trigger: Event that triggered this review cycle.
+        review_goal_summary: Short explanation of what this review pass should confirm.
+    """
+
+    review_round_number: int
+    review_cycle_trigger: ManagerRequirementReviewCycleTrigger
+    review_goal_summary: str
+
+    def __post_init__(self) -> None:
+        """Validates the review-cycle metadata."""
+
+        if self.review_round_number <= 0:
+            raise ValueError("review_round_number must be greater than zero.")
+        if not isinstance(self.review_cycle_trigger, ManagerRequirementReviewCycleTrigger):
+            raise ValueError(
+                "review_cycle_trigger must be a ManagerRequirementReviewCycleTrigger value."
+            )
+        if not self.review_goal_summary.strip():
+            raise ValueError("review_goal_summary must not be empty.")
+
+
+@dataclass(frozen=True, slots=True)
+class ManagerRequirementReviewInput:
+    """Represents the strict manager input required for requirement PR review.
+
+    Attributes:
+        pull_request_title: Requirement pull request title under review.
+        pull_request_summary: Human-readable pull request summary for the review.
+        updated_documents: Strictly typed documents changed by the requirement PR.
+        documents_to_review: Minimum document set to check for consistency.
+        review_cycle_context: Review-cycle metadata for the current review pass.
+        review_focus_areas: Minimal viewpoints required for consistency review.
+    """
+
+    pull_request_title: str
+    pull_request_summary: str
+    updated_documents: tuple[RequirementDocumentType, ...]
+    documents_to_review: tuple[RequirementDocumentType, ...]
+    review_cycle_context: ManagerRequirementReviewCycleContext
+    review_focus_areas: tuple[ManagerRequirementReviewFocusArea, ...]
+
+    def __post_init__(self) -> None:
+        """Validates the manager review input fields."""
+
+        if not self.pull_request_title.strip():
+            raise ValueError("pull_request_title must not be empty.")
+        if not self.pull_request_summary.strip():
+            raise ValueError("pull_request_summary must not be empty.")
+        if not self.updated_documents:
+            raise ValueError("updated_documents must not be empty.")
+        if len(set(self.updated_documents)) != len(self.updated_documents):
+            raise ValueError("updated_documents must not contain duplicate values.")
+        if not self.documents_to_review:
+            raise ValueError("documents_to_review must not be empty.")
+        if len(set(self.documents_to_review)) != len(self.documents_to_review):
+            raise ValueError("documents_to_review must not contain duplicate values.")
+        if RequirementDocumentType.REQUIREMENT not in self.documents_to_review:
+            raise ValueError("documents_to_review must include docs/REQUIREMENT.md.")
+        if not set(self.updated_documents).issubset(set(self.documents_to_review)):
+            raise ValueError(
+                "documents_to_review must include every document listed in updated_documents."
+            )
+        if not self.review_focus_areas:
+            raise ValueError("review_focus_areas must not be empty.")
+        if len(set(self.review_focus_areas)) != len(self.review_focus_areas):
+            raise ValueError("review_focus_areas must not contain duplicate values.")
+
+
+@dataclass(frozen=True, slots=True)
+class ManagerRequirementReviewInputResult:
+    """Represents whether manager requirement review can start immediately.
+
+    Attributes:
+        status: High-level outcome for caller-side branching.
+        summary_message: Human-readable status summary for orchestration.
+        missing_information_items: Missing inputs that must be supplied next.
+        review_input: Strict review input when the status is `READY`.
+    """
+
+    status: ManagerRequirementReviewInputStatus
+    summary_message: str
+    missing_information_items: tuple[str, ...] = ()
+    review_input: ManagerRequirementReviewInput | None = None
+
+    def __post_init__(self) -> None:
+        """Validates result consistency."""
+
+        if not self.summary_message.strip():
+            raise ValueError("summary_message must not be empty.")
+        if any(not missing_item.strip() for missing_item in self.missing_information_items):
+            raise ValueError("missing_information_items must not contain empty values.")
+        if len(set(self.missing_information_items)) != len(self.missing_information_items):
+            raise ValueError("missing_information_items must not contain duplicate values.")
+
+        if self.status is ManagerRequirementReviewInputStatus.READY:
+            if self.review_input is None:
+                raise ValueError("review_input must be provided when status is READY.")
+            if self.missing_information_items:
+                raise ValueError("missing_information_items must be empty when status is READY.")
+            return
+
+        if self.review_input is not None:
+            raise ValueError("review_input must be empty unless status is READY.")
+
+        if self.status is ManagerRequirementReviewInputStatus.INPUT_REQUIRED:
+            if not self.missing_information_items:
+                raise ValueError(
+                    "missing_information_items must not be empty when status is INPUT_REQUIRED."
+                )
+            return
+
+        if self.missing_information_items:
+            raise ValueError(
+                "missing_information_items must be empty when status is UNSUPPORTED_STATE."
+            )
+
+
+@dataclass(frozen=True, slots=True)
 class RequirementDiscoverySessionSummary:
     """Summarizes the shared requirement discovery session state.
 
@@ -467,6 +617,15 @@ _REQUIREMENT_PREPARATION_ASPECT_RULES = (
         "success criteria",
         ("success criteria", "success", "acceptance", "done", "completion", "approval"),
     ),
+)
+
+_MANAGER_REQUIREMENT_REVIEW_FOCUS_AREAS = (
+    ManagerRequirementReviewFocusArea.REQUIREMENT_OVERVIEW,
+    ManagerRequirementReviewFocusArea.DOMAIN_MODEL_ALIGNMENT,
+    ManagerRequirementReviewFocusArea.INTERACTION_AND_USE_CASE_ALIGNMENT,
+    ManagerRequirementReviewFocusArea.ARCHITECTURE_ALIGNMENT,
+    ManagerRequirementReviewFocusArea.OPEN_DECISION_HANDLING,
+    ManagerRequirementReviewFocusArea.DOCUMENT_CROSS_CHECK,
 )
 
 _REQUIREMENT_DOCUMENT_UPDATE_RULES = (
@@ -771,6 +930,77 @@ def build_requirement_pull_request_open_result(
     )
 
 
+def build_manager_requirement_review_input_result(
+    session_summary: RequirementDiscoverySessionSummary,
+    pull_request_create_payload: RequirementPullRequestCreatePayload | None,
+    review_cycle_context: ManagerRequirementReviewCycleContext | None,
+) -> ManagerRequirementReviewInputResult:
+    """Builds the strict manager input required to review a requirement PR.
+
+    Args:
+        session_summary: Current requirement discovery session snapshot.
+        pull_request_create_payload: Requirement PR payload created for the opened PR.
+        review_cycle_context: Review-cycle metadata for the current manager review pass.
+
+    Returns:
+        A typed result describing whether manager review can start immediately.
+
+    Example:
+        result = build_manager_requirement_review_input_result(
+            session_summary=session_summary,
+            pull_request_create_payload=pull_request_create_payload,
+            review_cycle_context=review_cycle_context,
+        )
+        if result.status is ManagerRequirementReviewInputStatus.READY:
+            assert result.review_input is not None
+    """
+
+    if session_summary.current_state is not RequirementDiscoverySessionState.PR_OPEN:
+        return ManagerRequirementReviewInputResult(
+            status=ManagerRequirementReviewInputStatus.UNSUPPORTED_STATE,
+            summary_message=(
+                "Manager requirement review input is not supported for workflow state "
+                f"{session_summary.current_state.value}."
+            ),
+        )
+
+    missing_information_items: list[str] = []
+    if pull_request_create_payload is None:
+        missing_information_items.append("updated requirement documents")
+    if review_cycle_context is None:
+        missing_information_items.append("review cycle context")
+
+    if missing_information_items:
+        return ManagerRequirementReviewInputResult(
+            status=ManagerRequirementReviewInputStatus.INPUT_REQUIRED,
+            summary_message=(
+                "Additional pull request metadata is required before manager review can start."
+            ),
+            missing_information_items=tuple(missing_information_items),
+        )
+
+    if pull_request_create_payload is None or review_cycle_context is None:
+        raise ValueError("Required manager review inputs must be available after validation.")
+
+    documents_to_review = _build_manager_requirement_review_documents(
+        pull_request_create_payload.updated_documents
+    )
+    return ManagerRequirementReviewInputResult(
+        status=ManagerRequirementReviewInputStatus.READY,
+        summary_message=(
+            "Prepared the manager requirement review input for the opened pull request."
+        ),
+        review_input=ManagerRequirementReviewInput(
+            pull_request_title=pull_request_create_payload.pull_request_title,
+            pull_request_summary=pull_request_create_payload.pull_request_body_summary,
+            updated_documents=pull_request_create_payload.updated_documents,
+            documents_to_review=documents_to_review,
+            review_cycle_context=review_cycle_context,
+            review_focus_areas=_MANAGER_REQUIREMENT_REVIEW_FOCUS_AREAS,
+        ),
+    )
+
+
 def _build_requirement_document_update_drafts(
     normalized_prompt_summary: str,
 ) -> tuple[RequirementDocumentUpdateDraft, ...]:
@@ -804,6 +1034,18 @@ def _collect_missing_requirement_preparation_items(
         if not any(keyword in normalized_prompt_summary for keyword in keywords):
             missing_information_items.append(aspect_name)
     return tuple(missing_information_items)
+
+
+def _build_manager_requirement_review_documents(
+    updated_documents: tuple[RequirementDocumentType, ...],
+) -> tuple[RequirementDocumentType, ...]:
+    """Builds the minimum document scope needed for manager requirement review."""
+
+    ordered_documents = [RequirementDocumentType.REQUIREMENT]
+    for updated_document in updated_documents:
+        if updated_document not in ordered_documents:
+            ordered_documents.append(updated_document)
+    return tuple(ordered_documents)
 
 
 @dataclass(frozen=True, slots=True)
