@@ -9,6 +9,7 @@ from control_plane import (
 from shared_contracts import (
     RequirementDiscoverySessionSummary,
     RequirementDocumentUpdateDraftResult,
+    RequirementPullRequestPreparationResult,
 )
 from worker_runtime import (
     RequirementDiscoveryBootstrapFailure,
@@ -51,12 +52,14 @@ class RequirementDiscoveryIntegrationResult:
     Attributes:
         architect_response_message: Architect-facing response text when bootstrap succeeds.
         document_update_draft_result: Typed summary of candidate `docs/` updates.
+        pull_request_preparation_result: Typed readiness result for requirement PR preparation.
         updated_session_summary: Updated session summary when bootstrap succeeds.
         failure: Failure classification when orchestration or bootstrap fails.
     """
 
     architect_response_message: str | None
     document_update_draft_result: RequirementDocumentUpdateDraftResult | None
+    pull_request_preparation_result: RequirementPullRequestPreparationResult | None
     updated_session_summary: RequirementDiscoverySessionSummary | None
     failure: RequirementDiscoveryIntegrationFailureDetail | None
 
@@ -110,6 +113,7 @@ def _build_orchestration_failure_result(
     return RequirementDiscoveryIntegrationResult(
         architect_response_message=None,
         document_update_draft_result=None,
+        pull_request_preparation_result=None,
         updated_session_summary=None,
         failure=RequirementDiscoveryIntegrationFailureDetail(
             stage=RequirementDiscoveryIntegrationFailureStage.CONTROL_PLANE,
@@ -128,6 +132,7 @@ def _build_bootstrap_failure_result(
     return RequirementDiscoveryIntegrationResult(
         architect_response_message=None,
         document_update_draft_result=None,
+        pull_request_preparation_result=None,
         updated_session_summary=None,
         failure=RequirementDiscoveryIntegrationFailureDetail(
             stage=RequirementDiscoveryIntegrationFailureStage.WORKER_RUNTIME,
@@ -146,6 +151,7 @@ def _build_success_result(
     return RequirementDiscoveryIntegrationResult(
         architect_response_message=bootstrap_result.architect_response_message,
         document_update_draft_result=bootstrap_result.document_update_draft_result,
+        pull_request_preparation_result=bootstrap_result.pull_request_preparation_result,
         updated_session_summary=bootstrap_result.updated_session_summary,
         failure=None,
     )

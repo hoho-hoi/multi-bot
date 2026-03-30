@@ -46,6 +46,14 @@ class RequirementDocumentUpdateDraftStatus(StrEnum):
     UNSUPPORTED_STATE = "UNSUPPORTED_STATE"
 
 
+class RequirementPullRequestPreparationStatus(StrEnum):
+    """Enumerates outcomes for requirement pull request preparation."""
+
+    READY = "READY"
+    INPUT_REQUIRED = "INPUT_REQUIRED"
+    UNSUPPORTED_STATE = "UNSUPPORTED_STATE"
+
+
 @dataclass(frozen=True, slots=True)
 class RequirementRepositoryContract:
     """Represents repository metadata required for requirement discovery.
@@ -182,6 +190,89 @@ class RequirementDocumentUpdateDraftResult:
 
 
 @dataclass(frozen=True, slots=True)
+class RequirementPullRequestPreparationDraft:
+    """Represents the minimum payload needed to prepare a requirement pull request.
+
+    Attributes:
+        pull_request_title: Suggested pull request title for the requirement update.
+        pull_request_summary: Human-readable summary of the proposed pull request.
+        updated_documents: Strictly typed list of documents that should be updated.
+    """
+
+    pull_request_title: str
+    pull_request_summary: str
+    updated_documents: tuple[RequirementDocumentType, ...]
+
+    def __post_init__(self) -> None:
+        """Validates the pull request preparation payload."""
+
+        if not self.pull_request_title.strip():
+            raise ValueError("pull_request_title must not be empty.")
+        if not self.pull_request_summary.strip():
+            raise ValueError("pull_request_summary must not be empty.")
+        if not self.updated_documents:
+            raise ValueError("updated_documents must not be empty.")
+        if len(set(self.updated_documents)) != len(self.updated_documents):
+            raise ValueError("updated_documents must not contain duplicate values.")
+
+
+@dataclass(frozen=True, slots=True)
+class RequirementPullRequestPreparationResult:
+    """Represents whether requirement pull request preparation can proceed.
+
+    Attributes:
+        status: High-level preparation outcome for caller-side branching.
+        summary_message: Human-readable summary for Architect workflow consumers.
+        source_prompt_summary: Latest intent summary used to derive the result.
+        missing_information_items: Missing inputs that should be clarified next.
+        preparation_draft: Suggested pull request payload when status is `READY`.
+    """
+
+    status: RequirementPullRequestPreparationStatus
+    summary_message: str
+    source_prompt_summary: str | None = None
+    missing_information_items: tuple[str, ...] = ()
+    preparation_draft: RequirementPullRequestPreparationDraft | None = None
+
+    def __post_init__(self) -> None:
+        """Validates result consistency."""
+
+        if not self.summary_message.strip():
+            raise ValueError("summary_message must not be empty.")
+        if self.source_prompt_summary is not None and not self.source_prompt_summary.strip():
+            raise ValueError("source_prompt_summary must not be empty when provided.")
+
+        if any(not missing_item.strip() for missing_item in self.missing_information_items):
+            raise ValueError("missing_information_items must not contain empty values.")
+        if len(set(self.missing_information_items)) != len(self.missing_information_items):
+            raise ValueError("missing_information_items must not contain duplicate values.")
+
+        if self.status is RequirementPullRequestPreparationStatus.READY:
+            if self.source_prompt_summary is None:
+                raise ValueError("source_prompt_summary must be provided when status is READY.")
+            if self.preparation_draft is None:
+                raise ValueError("preparation_draft must be provided when status is READY.")
+            if self.missing_information_items:
+                raise ValueError("missing_information_items must be empty when status is READY.")
+            return
+
+        if self.preparation_draft is not None:
+            raise ValueError("preparation_draft must be empty unless status is READY.")
+
+        if self.status is RequirementPullRequestPreparationStatus.INPUT_REQUIRED:
+            if not self.missing_information_items:
+                raise ValueError(
+                    "missing_information_items must not be empty when status is INPUT_REQUIRED."
+                )
+            return
+
+        if self.missing_information_items:
+            raise ValueError(
+                "missing_information_items must be empty when status is UNSUPPORTED_STATE."
+            )
+
+
+@dataclass(frozen=True, slots=True)
 class RequirementDiscoverySessionSummary:
     """Summarizes the shared requirement discovery session state.
 
@@ -246,6 +337,27 @@ _NO_UPDATES_INDICATORS = (
     "nothing to update",
     "no changes needed",
     "documents are unchanged",
+)
+
+_REQUIREMENT_PREPARATION_ASPECT_RULES = (
+    ("project goal", ("goal", "objective", "outcome", "purpose")),
+    (
+        "constraints",
+        (
+            "constraint",
+            "security",
+            "performance",
+            "reliability",
+            "rollback",
+            "logging",
+            "audit",
+            "observability",
+        ),
+    ),
+    (
+        "success criteria",
+        ("success criteria", "success", "acceptance", "done", "completion", "approval"),
+    ),
 )
 
 _REQUIREMENT_DOCUMENT_UPDATE_RULES = (
@@ -402,6 +514,99 @@ def build_requirement_document_update_draft_result(
     )
 
 
+def build_requirement_pull_request_preparation_result(
+    session_summary: RequirementDiscoverySessionSummary,
+) -> RequirementPullRequestPreparationResult:
+    """Builds a typed readiness result for requirement pull request preparation.
+
+    Args:
+        session_summary: Current requirement discovery session snapshot.
+
+    Returns:
+        A typed result describing whether requirement pull request preparation is ready.
+    """
+
+    if session_summary.current_state is RequirementDiscoverySessionState.ISSUE_READY:
+        return RequirementPullRequestPreparationResult(
+            status=RequirementPullRequestPreparationStatus.INPUT_REQUIRED,
+            summary_message=(
+                "Collect concrete requirement details before preparing the requirement "
+                "pull request."
+            ),
+            missing_information_items=_collect_missing_requirement_preparation_items(None),
+        )
+
+    if session_summary.current_state is not RequirementDiscoverySessionState.DISCOVERY_IN_PROGRESS:
+        return RequirementPullRequestPreparationResult(
+            status=RequirementPullRequestPreparationStatus.UNSUPPORTED_STATE,
+            summary_message=(
+                "Requirement pull request preparation is not supported for workflow state "
+                f"{session_summary.current_state.value}."
+            ),
+        )
+
+    latest_prompt_summary = session_summary.latest_prompt_summary
+    if latest_prompt_summary is None:
+        return RequirementPullRequestPreparationResult(
+            status=RequirementPullRequestPreparationStatus.INPUT_REQUIRED,
+            summary_message=(
+                "latest_prompt_summary is required before preparing the requirement pull request."
+            ),
+            missing_information_items=_collect_missing_requirement_preparation_items(None),
+        )
+
+    missing_information_items = _collect_missing_requirement_preparation_items(
+        latest_prompt_summary.casefold()
+    )
+    if missing_information_items:
+        return RequirementPullRequestPreparationResult(
+            status=RequirementPullRequestPreparationStatus.INPUT_REQUIRED,
+            summary_message=(
+                "Additional requirement clarification is needed before preparing the "
+                "requirement pull request."
+            ),
+            source_prompt_summary=latest_prompt_summary,
+            missing_information_items=missing_information_items,
+        )
+
+    document_update_draft_result = build_requirement_document_update_draft_result(session_summary)
+    if document_update_draft_result.status is not RequirementDocumentUpdateDraftStatus.READY:
+        return RequirementPullRequestPreparationResult(
+            status=RequirementPullRequestPreparationStatus.INPUT_REQUIRED,
+            summary_message=(
+                "Identify the requirement documents that should change before preparing "
+                "the requirement pull request."
+            ),
+            source_prompt_summary=latest_prompt_summary,
+            missing_information_items=("updated requirement documents",),
+        )
+
+    updated_documents = tuple(
+        draft.document_type for draft in document_update_draft_result.update_drafts
+    )
+    issue_contract = session_summary.issue_contract
+    return RequirementPullRequestPreparationResult(
+        status=RequirementPullRequestPreparationStatus.READY,
+        summary_message=(
+            "Prepared the minimum requirement pull request information for the latest "
+            "discovery outcome."
+        ),
+        source_prompt_summary=latest_prompt_summary,
+        preparation_draft=RequirementPullRequestPreparationDraft(
+            pull_request_title=(
+                "docs: finalize requirements for issue "
+                f"#{issue_contract.issue_number} {issue_contract.issue_title}"
+            ),
+            pull_request_summary=(
+                "Finalize the requirement discovery outcome for issue "
+                f"#{issue_contract.issue_number} by updating {len(updated_documents)} "
+                f"document(s). Latest intent: {latest_prompt_summary}"
+            ),
+            updated_documents=updated_documents,
+        ),
+    )
+
+
 def _build_requirement_document_update_drafts(
     normalized_prompt_summary: str,
 ) -> tuple[RequirementDocumentUpdateDraft, ...]:
@@ -418,6 +623,23 @@ def _build_requirement_document_update_drafts(
                 )
             )
     return tuple(update_drafts)
+
+
+def _collect_missing_requirement_preparation_items(
+    normalized_prompt_summary: str | None,
+) -> tuple[str, ...]:
+    """Collects missing clarification items for requirement pull request preparation."""
+
+    if normalized_prompt_summary is None:
+        return tuple(
+            aspect_name for aspect_name, _keywords in _REQUIREMENT_PREPARATION_ASPECT_RULES
+        )
+
+    missing_information_items: list[str] = []
+    for aspect_name, keywords in _REQUIREMENT_PREPARATION_ASPECT_RULES:
+        if not any(keyword in normalized_prompt_summary for keyword in keywords):
+            missing_information_items.append(aspect_name)
+    return tuple(missing_information_items)
 
 
 @dataclass(frozen=True, slots=True)
