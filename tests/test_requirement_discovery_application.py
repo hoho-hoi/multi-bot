@@ -9,6 +9,8 @@ from shared_contracts import (
     RequirementCommentContract,
     RequirementDiscoverySessionState,
     RequirementDiscoverySessionSummary,
+    RequirementDocumentType,
+    RequirementDocumentUpdateDraftStatus,
     RequirementIssueContract,
     RequirementRepositoryContract,
 )
@@ -64,6 +66,10 @@ def test_generate_requirement_discovery_architect_response_returns_initial_boots
     assert result.architect_response_message is not None
     assert "issue #12" in result.architect_response_message.lower()
     assert "project goal" in result.architect_response_message.lower()
+    assert result.document_update_draft_result is not None
+    assert result.document_update_draft_result.status is (
+        RequirementDocumentUpdateDraftStatus.INPUT_REQUIRED
+    )
 
 
 def test_generate_requirement_discovery_architect_response_returns_follow_up_message() -> None:
@@ -89,6 +95,11 @@ def test_generate_requirement_discovery_architect_response_returns_follow_up_mes
     assert "clarify audit logging, edge cases, and rollback requirements." in (
         result.architect_response_message.lower()
     )
+    assert result.document_update_draft_result is not None
+    assert result.document_update_draft_result.status is RequirementDocumentUpdateDraftStatus.READY
+    assert {draft.document_type for draft in result.document_update_draft_result.update_drafts} == {
+        RequirementDocumentType.REQUIREMENT
+    }
 
 
 def test_generate_requirement_discovery_architect_response_returns_invalid_input_failure() -> None:
@@ -103,6 +114,7 @@ def test_generate_requirement_discovery_architect_response_returns_invalid_input
 
     assert result.architect_response_message is None
     assert result.updated_session_summary is None
+    assert result.document_update_draft_result is None
     assert isinstance(result.failure, RequirementDiscoveryIntegrationFailureDetail)
     assert result.failure.stage is RequirementDiscoveryIntegrationFailureStage.CONTROL_PLANE
     assert result.failure.failure_code is RequirementDiscoveryOrchestrationFailureCode.INVALID_INPUT
@@ -124,6 +136,7 @@ def test_generate_requirement_discovery_architect_response_returns_unsupported_s
 
     assert result.architect_response_message is None
     assert result.updated_session_summary is None
+    assert result.document_update_draft_result is None
     assert isinstance(result.failure, RequirementDiscoveryIntegrationFailureDetail)
     assert result.failure.stage is RequirementDiscoveryIntegrationFailureStage.CONTROL_PLANE
     assert (

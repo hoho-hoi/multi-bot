@@ -7,15 +7,24 @@ from shared_contracts.requirement_discovery_contract import (
     RequirementDiscoverySessionState,
     RequirementDiscoverySessionSummary,
     RequirementDiscoveryWorkItemContract,
+    RequirementDocumentType,
+    RequirementDocumentUpdateDraft,
+    RequirementDocumentUpdateDraftResult,
+    RequirementDocumentUpdateDraftStatus,
     RequirementIssueContract,
     RequirementRepositoryContract,
     WorkerRoleName,
+    build_requirement_document_update_draft_result,
 )
 
 __all__ = [
     "IssueWorkItemContract",
     "ProviderName",
     "RepositoryReference",
+    "RequirementDocumentType",
+    "RequirementDocumentUpdateDraft",
+    "RequirementDocumentUpdateDraftResult",
+    "RequirementDocumentUpdateDraftStatus",
     "RequirementCommentContract",
     "RequirementDiscoverySessionState",
     "RequirementDiscoverySessionSummary",
@@ -23,4 +32,5 @@ __all__ = [
     "RequirementIssueContract",
     "RequirementRepositoryContract",
     "WorkerRoleName",
+    "build_requirement_document_update_draft_result",
 ]

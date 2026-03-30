@@ -6,7 +6,10 @@ from control_plane import (
     RequirementDiscoveryOrchestrationFailureCode,
     orchestrate_requirement_discovery_session,
 )
-from shared_contracts import RequirementDiscoverySessionSummary
+from shared_contracts import (
+    RequirementDiscoverySessionSummary,
+    RequirementDocumentUpdateDraftResult,
+)
 from worker_runtime import (
     RequirementDiscoveryBootstrapFailure,
     RequirementDiscoveryBootstrapFailureCode,
@@ -47,11 +50,13 @@ class RequirementDiscoveryIntegrationResult:
 
     Attributes:
         architect_response_message: Architect-facing response text when bootstrap succeeds.
+        document_update_draft_result: Typed summary of candidate `docs/` updates.
         updated_session_summary: Updated session summary when bootstrap succeeds.
         failure: Failure classification when orchestration or bootstrap fails.
     """
 
     architect_response_message: str | None
+    document_update_draft_result: RequirementDocumentUpdateDraftResult | None
     updated_session_summary: RequirementDiscoverySessionSummary | None
     failure: RequirementDiscoveryIntegrationFailureDetail | None
 
@@ -104,6 +109,7 @@ def _build_orchestration_failure_result(
 
     return RequirementDiscoveryIntegrationResult(
         architect_response_message=None,
+        document_update_draft_result=None,
         updated_session_summary=None,
         failure=RequirementDiscoveryIntegrationFailureDetail(
             stage=RequirementDiscoveryIntegrationFailureStage.CONTROL_PLANE,
@@ -121,6 +127,7 @@ def _build_bootstrap_failure_result(
 
     return RequirementDiscoveryIntegrationResult(
         architect_response_message=None,
+        document_update_draft_result=None,
         updated_session_summary=None,
         failure=RequirementDiscoveryIntegrationFailureDetail(
             stage=RequirementDiscoveryIntegrationFailureStage.WORKER_RUNTIME,
@@ -138,6 +145,7 @@ def _build_success_result(
 
     return RequirementDiscoveryIntegrationResult(
         architect_response_message=bootstrap_result.architect_response_message,
+        document_update_draft_result=bootstrap_result.document_update_draft_result,
         updated_session_summary=bootstrap_result.updated_session_summary,
         failure=None,
     )
