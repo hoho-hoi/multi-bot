@@ -13,6 +13,7 @@ class RequirementDiscoverySessionState(StrEnum):
     MANAGER_REVIEW_IN_PROGRESS = "STATE_MANAGER_REVIEW_IN_PROGRESS"
     REQUIREMENT_CHANGES_REQUESTED = "STATE_REQUIREMENT_CHANGES_REQUESTED"
     REQUIREMENT_APPROVED = "STATE_REQUIREMENT_APPROVED"
+    MILESTONE_PLANNING = "STATE_MILESTONE_PLANNING"
 
 
 class WorkerRoleName(StrEnum):
@@ -79,6 +80,22 @@ class ManagerRequirementReviewExecutionStatus(StrEnum):
     READY = "READY"
     INPUT_REQUIRED = "INPUT_REQUIRED"
     UNSUPPORTED_STATE = "UNSUPPORTED_STATE"
+
+
+class MilestonePlanningStatus(StrEnum):
+    """Enumerates outcomes for building the first delivery milestone."""
+
+    READY = "READY"
+    INPUT_REQUIRED = "INPUT_REQUIRED"
+    UNSUPPORTED_STATE = "UNSUPPORTED_STATE"
+
+
+class UseCaseIdentifier(StrEnum):
+    """Enumerates supported use-case identifiers from `docs/USE_CASES.md`."""
+
+    DEFINE_REQUIREMENTS_WITH_ARCHITECT = "UC_DEFINE_REQUIREMENTS_WITH_ARCHITECT"
+    ORCHESTRATE_DELIVERY_WITH_MANAGER = "UC_ORCHESTRATE_DELIVERY_WITH_MANAGER"
+    IMPLEMENT_ISSUE_WITH_ENGINEER = "UC_IMPLEMENT_ISSUE_WITH_ENGINEER"
 
 
 class ManagerRequirementReviewDecision(StrEnum):
@@ -719,6 +736,157 @@ class ManagerRequirementReviewExecutionResult:
 
 
 @dataclass(frozen=True, slots=True)
+class MilestoneImplementationFocus:
+    """Represents one prioritized implementation focus inside a milestone.
+
+    Attributes:
+        use_case_identifier: Use case that this focus advances next.
+        focus_summary: Human-readable explanation of the next vertical slice.
+        rationale: Why this focus should be prioritized now.
+    """
+
+    use_case_identifier: UseCaseIdentifier
+    focus_summary: str
+    rationale: str
+
+    def __post_init__(self) -> None:
+        """Validates the focus fields."""
+
+        if not self.focus_summary.strip():
+            raise ValueError("focus_summary must not be empty.")
+        if not self.rationale.strip():
+            raise ValueError("rationale must not be empty.")
+
+
+@dataclass(frozen=True, slots=True)
+class MilestonePlanningModel:
+    """Represents the first post-approval milestone in a strict typed form.
+
+    Attributes:
+        milestone_goal: Human-readable goal for the first delivery milestone.
+        completion_criteria: Verifiable outcomes required to finish the milestone.
+        target_use_cases: Use cases intentionally covered by the milestone.
+        implementation_focuses: Ordered focus list for immediate execution.
+
+    Example:
+        focus = milestone_planning_model.select_next_implementation_focus(
+            completed_use_case=UseCaseIdentifier.DEFINE_REQUIREMENTS_WITH_ARCHITECT,
+        )
+        assert focus.use_case_identifier is UseCaseIdentifier.ORCHESTRATE_DELIVERY_WITH_MANAGER
+    """
+
+    milestone_goal: str
+    completion_criteria: tuple[str, ...]
+    target_use_cases: tuple[UseCaseIdentifier, ...]
+    implementation_focuses: tuple[MilestoneImplementationFocus, ...]
+
+    def __post_init__(self) -> None:
+        """Validates the milestone planning model."""
+
+        if not self.milestone_goal.strip():
+            raise ValueError("milestone_goal must not be empty.")
+        if not self.completion_criteria:
+            raise ValueError("completion_criteria must not be empty.")
+        if any(
+            not completion_criterion.strip() for completion_criterion in self.completion_criteria
+        ):
+            raise ValueError("completion_criteria must not contain empty values.")
+        if len(set(self.completion_criteria)) != len(self.completion_criteria):
+            raise ValueError("completion_criteria must not contain duplicate values.")
+        if not self.target_use_cases:
+            raise ValueError("target_use_cases must not be empty.")
+        if len(set(self.target_use_cases)) != len(self.target_use_cases):
+            raise ValueError("target_use_cases must not contain duplicate values.")
+        if not self.implementation_focuses:
+            raise ValueError("implementation_focuses must not be empty.")
+        focus_use_case_identifiers = tuple(
+            implementation_focus.use_case_identifier
+            for implementation_focus in self.implementation_focuses
+        )
+        if len(set(focus_use_case_identifiers)) != len(focus_use_case_identifiers):
+            raise ValueError(
+                "implementation_focuses must not contain duplicate use_case_identifier values."
+            )
+        if not set(focus_use_case_identifiers).issubset(set(self.target_use_cases)):
+            raise ValueError(
+                "implementation_focuses must reference only use cases listed in target_use_cases."
+            )
+
+    def select_next_implementation_focus(
+        self,
+        completed_use_case: UseCaseIdentifier,
+    ) -> MilestoneImplementationFocus:
+        """Returns the next prioritized implementation focus after a completed use case."""
+
+        for implementation_focus in self.implementation_focuses:
+            if implementation_focus.use_case_identifier is not completed_use_case:
+                return implementation_focus
+
+        raise ValueError("No remaining implementation focus is available after completed_use_case.")
+
+
+@dataclass(frozen=True, slots=True)
+class MilestonePlanningResult:
+    """Represents whether the first delivery milestone can be planned now.
+
+    Attributes:
+        status: High-level planning outcome for caller-side branching.
+        summary_message: Human-readable status summary for orchestration.
+        next_state: Workflow state after interpreting the planning result.
+        missing_information_items: Missing inputs required to plan the milestone.
+        milestone_planning_model: Strict milestone model when status is `READY`.
+    """
+
+    status: MilestonePlanningStatus
+    summary_message: str
+    next_state: RequirementDiscoverySessionState
+    missing_information_items: tuple[str, ...] = ()
+    milestone_planning_model: MilestonePlanningModel | None = None
+
+    def __post_init__(self) -> None:
+        """Validates result consistency."""
+
+        if not self.summary_message.strip():
+            raise ValueError("summary_message must not be empty.")
+        if any(not missing_item.strip() for missing_item in self.missing_information_items):
+            raise ValueError("missing_information_items must not contain empty values.")
+        if len(set(self.missing_information_items)) != len(self.missing_information_items):
+            raise ValueError("missing_information_items must not contain duplicate values.")
+        if not isinstance(self.next_state, RequirementDiscoverySessionState):
+            raise ValueError("next_state must be a RequirementDiscoverySessionState value.")
+
+        if self.status is MilestonePlanningStatus.READY:
+            if self.milestone_planning_model is None:
+                raise ValueError("milestone_planning_model must be provided when status is READY.")
+            if self.missing_information_items:
+                raise ValueError("missing_information_items must be empty when status is READY.")
+            if self.next_state is not RequirementDiscoverySessionState.MILESTONE_PLANNING:
+                raise ValueError(
+                    "next_state must be STATE_MILESTONE_PLANNING when status is READY."
+                )
+            return
+
+        if self.milestone_planning_model is not None:
+            raise ValueError("milestone_planning_model must be empty unless status is READY.")
+
+        if self.status is MilestonePlanningStatus.INPUT_REQUIRED:
+            if not self.missing_information_items:
+                raise ValueError(
+                    "missing_information_items must not be empty when status is INPUT_REQUIRED."
+                )
+            if self.next_state is not RequirementDiscoverySessionState.REQUIREMENT_APPROVED:
+                raise ValueError(
+                    "next_state must be STATE_REQUIREMENT_APPROVED when status is INPUT_REQUIRED."
+                )
+            return
+
+        if self.missing_information_items:
+            raise ValueError(
+                "missing_information_items must be empty when status is UNSUPPORTED_STATE."
+            )
+
+
+@dataclass(frozen=True, slots=True)
 class RequirementDiscoverySessionSummary:
     """Summarizes the shared requirement discovery session state.
 
@@ -889,6 +1057,33 @@ _REQUIREMENT_DOCUMENT_UPDATE_RULES = (
         rationale=(
             "The latest intent changes structural boundaries that belong in "
             "the architecture diagram."
+        ),
+    ),
+)
+
+_MILESTONE_USE_CASE_RULES = (
+    (
+        UseCaseIdentifier.ORCHESTRATE_DELIVERY_WITH_MANAGER,
+        (
+            "manager",
+            "milestone",
+            "planning",
+            "backlog",
+            "implementation issue",
+            "implementation issues",
+            "issue split",
+            "review workflow",
+        ),
+    ),
+    (
+        UseCaseIdentifier.IMPLEMENT_ISSUE_WITH_ENGINEER,
+        (
+            "engineer",
+            "implementation pull request",
+            "implementation pr",
+            "execute issue",
+            "test suite",
+            "implementation review",
         ),
     ),
 )
@@ -1298,6 +1493,89 @@ def build_manager_requirement_review_execution_result(
     )
 
 
+def build_milestone_planning_result(
+    session_summary: RequirementDiscoverySessionSummary,
+    requirement_review_execution_result: ManagerRequirementReviewExecutionResult | None,
+    requirement_documents_summary: str | None,
+) -> MilestonePlanningResult:
+    """Builds the first strict milestone planning model after requirement approval.
+
+    Args:
+        session_summary: Current requirement discovery session snapshot.
+        requirement_review_execution_result: Approved manager review execution result.
+        requirement_documents_summary: Summary of approved requirement and use-case documents.
+
+    Returns:
+        A typed result describing whether milestone planning can proceed now.
+
+    Example:
+        result = build_milestone_planning_result(
+            session_summary=session_summary,
+            requirement_review_execution_result=requirement_review_execution_result,
+            requirement_documents_summary=requirement_documents_summary,
+        )
+        if result.status is MilestonePlanningStatus.READY:
+            assert result.milestone_planning_model is not None
+    """
+
+    if session_summary.current_state is not RequirementDiscoverySessionState.REQUIREMENT_APPROVED:
+        return MilestonePlanningResult(
+            status=MilestonePlanningStatus.UNSUPPORTED_STATE,
+            summary_message=(
+                "Milestone planning is not supported for workflow state "
+                f"{session_summary.current_state.value}."
+            ),
+            next_state=session_summary.current_state,
+        )
+
+    missing_information_items: list[str] = []
+    if not _is_requirement_review_approved(requirement_review_execution_result):
+        missing_information_items.append("approved requirement review result")
+    if requirement_documents_summary is None or not requirement_documents_summary.strip():
+        missing_information_items.append("requirement documents summary")
+
+    if missing_information_items:
+        return MilestonePlanningResult(
+            status=MilestonePlanningStatus.INPUT_REQUIRED,
+            summary_message=(
+                "Approved requirement review output and document summaries are required "
+                "before milestone planning can begin."
+            ),
+            next_state=RequirementDiscoverySessionState.REQUIREMENT_APPROVED,
+            missing_information_items=tuple(missing_information_items),
+        )
+
+    if requirement_documents_summary is None:
+        raise ValueError("requirement_documents_summary must be available after validation.")
+
+    normalized_requirement_documents_summary = requirement_documents_summary.casefold()
+    target_use_cases = _build_milestone_target_use_cases(normalized_requirement_documents_summary)
+    if not target_use_cases:
+        return MilestonePlanningResult(
+            status=MilestonePlanningStatus.INPUT_REQUIRED,
+            summary_message=(
+                "The approved requirement summary does not yet identify the first delivery "
+                "use cases for milestone planning."
+            ),
+            next_state=RequirementDiscoverySessionState.REQUIREMENT_APPROVED,
+            missing_information_items=("target use cases for the first milestone",),
+        )
+
+    return MilestonePlanningResult(
+        status=MilestonePlanningStatus.READY,
+        summary_message=(
+            "Prepared the first delivery milestone from the approved requirement summary."
+        ),
+        next_state=RequirementDiscoverySessionState.MILESTONE_PLANNING,
+        milestone_planning_model=MilestonePlanningModel(
+            milestone_goal=_build_milestone_goal(target_use_cases),
+            completion_criteria=_build_milestone_completion_criteria(target_use_cases),
+            target_use_cases=target_use_cases,
+            implementation_focuses=_build_milestone_implementation_focuses(target_use_cases),
+        ),
+    )
+
+
 def _build_requirement_document_update_drafts(
     normalized_prompt_summary: str,
 ) -> tuple[RequirementDocumentUpdateDraft, ...]:
@@ -1353,6 +1631,116 @@ def _build_manager_requirement_review_next_state(
     if review_decision is ManagerRequirementReviewDecision.APPROVE:
         return RequirementDiscoverySessionState.REQUIREMENT_APPROVED
     return RequirementDiscoverySessionState.REQUIREMENT_CHANGES_REQUESTED
+
+
+def _is_requirement_review_approved(
+    requirement_review_execution_result: ManagerRequirementReviewExecutionResult | None,
+) -> bool:
+    """Returns whether the manager review execution result represents an approval."""
+
+    if requirement_review_execution_result is None:
+        return False
+    if (
+        requirement_review_execution_result.status
+        is not ManagerRequirementReviewExecutionStatus.READY
+    ):
+        return False
+    if (
+        requirement_review_execution_result.next_state
+        is not RequirementDiscoverySessionState.REQUIREMENT_APPROVED
+    ):
+        return False
+
+    review_execution_payload = requirement_review_execution_result.review_execution_payload
+    if review_execution_payload is None:
+        return False
+    return review_execution_payload.review_decision is ManagerRequirementReviewDecision.APPROVE
+
+
+def _build_milestone_target_use_cases(
+    normalized_requirement_documents_summary: str,
+) -> tuple[UseCaseIdentifier, ...]:
+    """Builds the ordered target use cases for the first delivery milestone."""
+
+    ordered_target_use_cases: list[UseCaseIdentifier] = []
+    for use_case_identifier, keywords in _MILESTONE_USE_CASE_RULES:
+        if any(keyword in normalized_requirement_documents_summary for keyword in keywords):
+            ordered_target_use_cases.append(use_case_identifier)
+    return tuple(ordered_target_use_cases)
+
+
+def _build_milestone_goal(target_use_cases: tuple[UseCaseIdentifier, ...]) -> str:
+    """Builds the first milestone goal from the selected use cases."""
+
+    if target_use_cases == (
+        UseCaseIdentifier.ORCHESTRATE_DELIVERY_WITH_MANAGER,
+        UseCaseIdentifier.IMPLEMENT_ISSUE_WITH_ENGINEER,
+    ):
+        return (
+            "Establish the first post-requirement delivery slice from milestone planning "
+            "through engineer execution."
+        )
+    if target_use_cases == (UseCaseIdentifier.ORCHESTRATE_DELIVERY_WITH_MANAGER,):
+        return "Turn approved requirements into the first milestone and implementation backlog."
+    return "Validate the first engineer execution loop from an approved implementation issue."
+
+
+def _build_milestone_completion_criteria(
+    target_use_cases: tuple[UseCaseIdentifier, ...],
+) -> tuple[str, ...]:
+    """Builds completion criteria for the first delivery milestone."""
+
+    completion_criteria: list[str] = []
+    if UseCaseIdentifier.ORCHESTRATE_DELIVERY_WITH_MANAGER in target_use_cases:
+        completion_criteria.extend(
+            (
+                "Manager can define the first milestone from the approved requirements.",
+                "Manager can create prioritized implementation issues for the milestone backlog.",
+            )
+        )
+    if UseCaseIdentifier.IMPLEMENT_ISSUE_WITH_ENGINEER in target_use_cases:
+        completion_criteria.append(
+            "Engineer can complete the first prioritized implementation issue and open an "
+            "implementation pull request."
+        )
+    return tuple(completion_criteria)
+
+
+def _build_milestone_implementation_focuses(
+    target_use_cases: tuple[UseCaseIdentifier, ...],
+) -> tuple[MilestoneImplementationFocus, ...]:
+    """Builds ordered implementation focuses for the first delivery milestone."""
+
+    implementation_focuses: list[MilestoneImplementationFocus] = []
+    if UseCaseIdentifier.ORCHESTRATE_DELIVERY_WITH_MANAGER in target_use_cases:
+        implementation_focuses.append(
+            MilestoneImplementationFocus(
+                use_case_identifier=UseCaseIdentifier.ORCHESTRATE_DELIVERY_WITH_MANAGER,
+                focus_summary=(
+                    "Implement manager milestone planning and implementation issue creation "
+                    "from approved requirements."
+                ),
+                rationale=(
+                    "UC_ORCHESTRATE_DELIVERY_WITH_MANAGER is the first delivery step after "
+                    "requirement approval."
+                ),
+            )
+        )
+    if UseCaseIdentifier.IMPLEMENT_ISSUE_WITH_ENGINEER in target_use_cases:
+        implementation_focuses.append(
+            MilestoneImplementationFocus(
+                use_case_identifier=UseCaseIdentifier.IMPLEMENT_ISSUE_WITH_ENGINEER,
+                focus_summary=(
+                    "Implement the first engineer issue execution loop and implementation "
+                    "pull request handoff."
+                ),
+                rationale=(
+                    "UC_IMPLEMENT_ISSUE_WITH_ENGINEER proves that the planned backlog can "
+                    "be executed end to end."
+                ),
+            )
+        )
+    return tuple(implementation_focuses)
 
 
 def _validate_manager_requirement_review_findings(

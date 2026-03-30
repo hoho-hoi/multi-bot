@@ -8,6 +8,7 @@ from shared_contracts import (
     ManagerRequirementReviewFocusArea,
     ManagerRequirementReviewInput,
     ManagerRequirementReviewInputStatus,
+    MilestonePlanningStatus,
     RepositoryReference,
     RequirementCommentContract,
     RequirementDiscoverySessionState,
@@ -21,9 +22,11 @@ from shared_contracts import (
     RequirementPullRequestOpenStatus,
     RequirementPullRequestPreparationStatus,
     RequirementRepositoryContract,
+    UseCaseIdentifier,
     build_manager_requirement_review_decision_result,
     build_manager_requirement_review_execution_result,
     build_manager_requirement_review_input_result,
+    build_milestone_planning_result,
     build_requirement_pull_request_open_result,
     build_requirement_pull_request_preparation_result,
 )
@@ -98,6 +101,28 @@ def create_manager_requirement_review_input() -> ManagerRequirementReviewInput:
             ManagerRequirementReviewFocusArea.ARCHITECTURE_ALIGNMENT,
             ManagerRequirementReviewFocusArea.DOCUMENT_CROSS_CHECK,
         ),
+    )
+
+
+def create_requirement_approved_review_execution_result() -> object:
+    """Creates an approved manager review execution result for milestone planning tests."""
+
+    review_session_summary = RequirementDiscoverySessionSummary(
+        issue_contract=create_requirement_issue_contract(),
+        current_state=RequirementDiscoverySessionState.MANAGER_REVIEW_IN_PROGRESS,
+        latest_comment_contract=create_requirement_comment_contract(),
+        latest_prompt_summary="Manager is executing the requirement review decision.",
+    )
+    review_input = create_manager_requirement_review_input()
+    decision_result = build_manager_requirement_review_decision_result(
+        review_input=review_input,
+        review_findings=(),
+    )
+
+    return build_manager_requirement_review_execution_result(
+        session_summary=review_session_summary,
+        review_input=review_input,
+        decision_result=decision_result,
     )
 
 
@@ -666,4 +691,109 @@ def test_build_manager_requirement_review_execution_result_rejects_unsupported_s
 
     assert result.status is ManagerRequirementReviewExecutionStatus.UNSUPPORTED_STATE
     assert result.review_execution_payload is None
+    assert result.next_state is RequirementDiscoverySessionState.PR_OPEN
+
+
+def test_build_milestone_planning_result_returns_first_delivery_milestone() -> None:
+    session_summary = RequirementDiscoverySessionSummary(
+        issue_contract=create_requirement_issue_contract(),
+        current_state=RequirementDiscoverySessionState.REQUIREMENT_APPROVED,
+        latest_comment_contract=create_requirement_comment_contract(),
+        latest_prompt_summary="Requirement approval completed and delivery planning can begin.",
+    )
+
+    result = build_milestone_planning_result(
+        session_summary=session_summary,
+        requirement_review_execution_result=create_requirement_approved_review_execution_result(),
+        requirement_documents_summary=(
+            "The approved requirements prioritize the manager planning workflow that defines "
+            "the first milestone, creates implementation issues, and hands the backlog to "
+            "engineer execution and review."
+        ),
+    )
+
+    assert result.status is MilestonePlanningStatus.READY
+    assert result.next_state is RequirementDiscoverySessionState.MILESTONE_PLANNING
+    assert result.missing_information_items == ()
+    assert result.milestone_planning_model is not None
+    assert result.milestone_planning_model.target_use_cases == (
+        UseCaseIdentifier.ORCHESTRATE_DELIVERY_WITH_MANAGER,
+        UseCaseIdentifier.IMPLEMENT_ISSUE_WITH_ENGINEER,
+    )
+    assert len(result.milestone_planning_model.completion_criteria) >= 2
+
+
+def test_milestone_planning_model_selects_manager_focus_after_requirement_completion() -> None:
+    session_summary = RequirementDiscoverySessionSummary(
+        issue_contract=create_requirement_issue_contract(),
+        current_state=RequirementDiscoverySessionState.REQUIREMENT_APPROVED,
+        latest_comment_contract=create_requirement_comment_contract(),
+        latest_prompt_summary="Requirement approval completed and delivery planning can begin.",
+    )
+
+    result = build_milestone_planning_result(
+        session_summary=session_summary,
+        requirement_review_execution_result=create_requirement_approved_review_execution_result(),
+        requirement_documents_summary=(
+            "The approved requirements prioritize the manager planning workflow that defines "
+            "the first milestone, creates implementation issues, and hands the backlog to "
+            "engineer execution and review."
+        ),
+    )
+
+    milestone_planning_model = result.milestone_planning_model
+    if milestone_planning_model is None:
+        raise AssertionError("Expected milestone_planning_model to be available.")
+
+    implementation_focus = milestone_planning_model.select_next_implementation_focus(
+        completed_use_case=UseCaseIdentifier.DEFINE_REQUIREMENTS_WITH_ARCHITECT,
+    )
+
+    assert implementation_focus.use_case_identifier is (
+        UseCaseIdentifier.ORCHESTRATE_DELIVERY_WITH_MANAGER
+    )
+    assert "milestone" in implementation_focus.focus_summary.casefold()
+
+
+def test_build_milestone_planning_result_requires_supported_delivery_summary() -> None:
+    session_summary = RequirementDiscoverySessionSummary(
+        issue_contract=create_requirement_issue_contract(),
+        current_state=RequirementDiscoverySessionState.REQUIREMENT_APPROVED,
+        latest_comment_contract=create_requirement_comment_contract(),
+        latest_prompt_summary="Requirement approval completed and delivery planning can begin.",
+    )
+
+    result = build_milestone_planning_result(
+        session_summary=session_summary,
+        requirement_review_execution_result=create_requirement_approved_review_execution_result(),
+        requirement_documents_summary=(
+            "The approved documents only restate the architect requirement discussion "
+            "without describing the next delivery workflow."
+        ),
+    )
+
+    assert result.status is MilestonePlanningStatus.INPUT_REQUIRED
+    assert result.milestone_planning_model is None
+    assert result.next_state is RequirementDiscoverySessionState.REQUIREMENT_APPROVED
+    assert result.missing_information_items == ("target use cases for the first milestone",)
+
+
+def test_build_milestone_planning_result_rejects_unsupported_state() -> None:
+    session_summary = RequirementDiscoverySessionSummary(
+        issue_contract=create_requirement_issue_contract(),
+        current_state=RequirementDiscoverySessionState.PR_OPEN,
+        latest_comment_contract=create_requirement_comment_contract(),
+        latest_prompt_summary="Requirement review is still in progress.",
+    )
+
+    result = build_milestone_planning_result(
+        session_summary=session_summary,
+        requirement_review_execution_result=create_requirement_approved_review_execution_result(),
+        requirement_documents_summary=(
+            "The approved requirements prioritize the manager planning workflow."
+        ),
+    )
+
+    assert result.status is MilestonePlanningStatus.UNSUPPORTED_STATE
+    assert result.milestone_planning_model is None
     assert result.next_state is RequirementDiscoverySessionState.PR_OPEN
