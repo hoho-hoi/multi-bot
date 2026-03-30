@@ -8,8 +8,10 @@ from shared_contracts import (
     RequirementDocumentUpdateDraftResult,
     RequirementDocumentUpdateDraftStatus,
     RequirementIssueContract,
+    RequirementPullRequestOpenStatus,
     RequirementPullRequestPreparationStatus,
     RequirementRepositoryContract,
+    build_requirement_pull_request_open_result,
     build_requirement_pull_request_preparation_result,
 )
 
@@ -262,6 +264,56 @@ def test_build_requirement_pull_request_preparation_result_lists_missing_informa
 
     assert result.status is RequirementPullRequestPreparationStatus.INPUT_REQUIRED
     assert result.preparation_draft is None
+    assert result.missing_information_items == (
+        "project goal",
+        "constraints",
+        "success criteria",
+    )
+
+
+def test_build_requirement_pull_request_open_result_returns_ready_payload() -> None:
+    session_summary = RequirementDiscoverySessionSummary(
+        issue_contract=create_requirement_issue_contract(),
+        current_state=RequirementDiscoverySessionState.DISCOVERY_IN_PROGRESS,
+        latest_comment_contract=create_requirement_comment_contract(),
+        latest_prompt_summary=(
+            "Clarify the project goal, security constraints, success criteria, "
+            "user workflow, and architecture boundaries."
+        ),
+    )
+
+    result = build_requirement_pull_request_open_result(session_summary)
+
+    assert result.status is RequirementPullRequestOpenStatus.READY
+    assert result.source_prompt_summary == session_summary.latest_prompt_summary
+    assert result.next_state is RequirementDiscoverySessionState.PR_OPEN
+    assert result.missing_information_items == ()
+    assert result.pull_request_create_payload is not None
+    assert result.pull_request_create_payload.target_state is (
+        RequirementDiscoverySessionState.PR_OPEN
+    )
+    assert {
+        document_type for document_type in result.pull_request_create_payload.updated_documents
+    } == {
+        RequirementDocumentType.REQUIREMENT,
+        RequirementDocumentType.USE_CASES,
+        RequirementDocumentType.ARCHITECTURE_DIAGRAM,
+    }
+
+
+def test_build_requirement_pull_request_open_result_returns_additional_question_result() -> None:
+    session_summary = RequirementDiscoverySessionSummary(
+        issue_contract=create_requirement_issue_contract(),
+        current_state=RequirementDiscoverySessionState.DISCOVERY_IN_PROGRESS,
+        latest_comment_contract=create_requirement_comment_contract(),
+        latest_prompt_summary="Clarify the user workflow before updating docs.",
+    )
+
+    result = build_requirement_pull_request_open_result(session_summary)
+
+    assert result.status is RequirementPullRequestOpenStatus.INPUT_REQUIRED
+    assert result.next_state is RequirementDiscoverySessionState.DISCOVERY_IN_PROGRESS
+    assert result.pull_request_create_payload is None
     assert result.missing_information_items == (
         "project goal",
         "constraints",

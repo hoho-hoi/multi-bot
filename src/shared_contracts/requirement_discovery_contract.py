@@ -54,6 +54,14 @@ class RequirementPullRequestPreparationStatus(StrEnum):
     UNSUPPORTED_STATE = "UNSUPPORTED_STATE"
 
 
+class RequirementPullRequestOpenStatus(StrEnum):
+    """Enumerates outcomes for requirement pull request payload creation."""
+
+    READY = "READY"
+    INPUT_REQUIRED = "INPUT_REQUIRED"
+    UNSUPPORTED_STATE = "UNSUPPORTED_STATE"
+
+
 @dataclass(frozen=True, slots=True)
 class RequirementRepositoryContract:
     """Represents repository metadata required for requirement discovery.
@@ -263,6 +271,107 @@ class RequirementPullRequestPreparationResult:
             if not self.missing_information_items:
                 raise ValueError(
                     "missing_information_items must not be empty when status is INPUT_REQUIRED."
+                )
+            return
+
+        if self.missing_information_items:
+            raise ValueError(
+                "missing_information_items must be empty when status is UNSUPPORTED_STATE."
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class RequirementPullRequestCreatePayload:
+    """Represents the typed payload required to open a requirement pull request.
+
+    Attributes:
+        pull_request_title: Suggested title for the requirement pull request.
+        pull_request_body_summary: Summary content that should appear in the pull request body.
+        updated_documents: Strictly typed list of requirement documents that changed.
+        target_state: Workflow state reached once the pull request is opened.
+    """
+
+    pull_request_title: str
+    pull_request_body_summary: str
+    updated_documents: tuple[RequirementDocumentType, ...]
+    target_state: RequirementDiscoverySessionState
+
+    def __post_init__(self) -> None:
+        """Validates the pull request creation payload."""
+
+        if not self.pull_request_title.strip():
+            raise ValueError("pull_request_title must not be empty.")
+        if not self.pull_request_body_summary.strip():
+            raise ValueError("pull_request_body_summary must not be empty.")
+        if not self.updated_documents:
+            raise ValueError("updated_documents must not be empty.")
+        if len(set(self.updated_documents)) != len(self.updated_documents):
+            raise ValueError("updated_documents must not contain duplicate values.")
+        if self.target_state is not RequirementDiscoverySessionState.PR_OPEN:
+            raise ValueError("target_state must be STATE_REQUIREMENT_PR_OPEN.")
+
+
+@dataclass(frozen=True, slots=True)
+class RequirementPullRequestOpenResult:
+    """Represents whether a requirement pull request can be opened next.
+
+    Attributes:
+        status: High-level outcome for caller-side branching.
+        summary_message: Human-readable summary for the next workflow step.
+        next_state: Workflow state to continue with after interpreting the result.
+        source_prompt_summary: Latest intent summary used to derive the result.
+        missing_information_items: Missing inputs that should be clarified next.
+        pull_request_create_payload: Strict payload for pull request creation when ready.
+    """
+
+    status: RequirementPullRequestOpenStatus
+    summary_message: str
+    next_state: RequirementDiscoverySessionState
+    source_prompt_summary: str | None = None
+    missing_information_items: tuple[str, ...] = ()
+    pull_request_create_payload: RequirementPullRequestCreatePayload | None = None
+
+    def __post_init__(self) -> None:
+        """Validates result consistency."""
+
+        if not self.summary_message.strip():
+            raise ValueError("summary_message must not be empty.")
+        if self.source_prompt_summary is not None and not self.source_prompt_summary.strip():
+            raise ValueError("source_prompt_summary must not be empty when provided.")
+        if any(not missing_item.strip() for missing_item in self.missing_information_items):
+            raise ValueError("missing_information_items must not contain empty values.")
+        if len(set(self.missing_information_items)) != len(self.missing_information_items):
+            raise ValueError("missing_information_items must not contain duplicate values.")
+        if not isinstance(self.next_state, RequirementDiscoverySessionState):
+            raise ValueError("next_state must be a RequirementDiscoverySessionState value.")
+
+        if self.status is RequirementPullRequestOpenStatus.READY:
+            if self.source_prompt_summary is None:
+                raise ValueError("source_prompt_summary must be provided when status is READY.")
+            if self.pull_request_create_payload is None:
+                raise ValueError(
+                    "pull_request_create_payload must be provided when status is READY."
+                )
+            if self.missing_information_items:
+                raise ValueError("missing_information_items must be empty when status is READY.")
+            if self.next_state is not RequirementDiscoverySessionState.PR_OPEN:
+                raise ValueError(
+                    "next_state must be STATE_REQUIREMENT_PR_OPEN when status is READY."
+                )
+            return
+
+        if self.pull_request_create_payload is not None:
+            raise ValueError("pull_request_create_payload must be empty unless status is READY.")
+
+        if self.status is RequirementPullRequestOpenStatus.INPUT_REQUIRED:
+            if not self.missing_information_items:
+                raise ValueError(
+                    "missing_information_items must not be empty when status is INPUT_REQUIRED."
+                )
+            if self.next_state is not RequirementDiscoverySessionState.DISCOVERY_IN_PROGRESS:
+                raise ValueError(
+                    "next_state must be STATE_REQUIREMENT_DISCOVERY_IN_PROGRESS when status "
+                    "is INPUT_REQUIRED."
                 )
             return
 
@@ -604,6 +713,61 @@ def build_requirement_pull_request_preparation_result(
             ),
             updated_documents=updated_documents,
         ),
+    )
+
+
+def build_requirement_pull_request_open_result(
+    session_summary: RequirementDiscoverySessionSummary,
+) -> RequirementPullRequestOpenResult:
+    """Builds a typed result for opening the next requirement pull request.
+
+    Args:
+        session_summary: Current requirement discovery session snapshot.
+
+    Returns:
+        A typed result describing whether pull request creation can proceed now.
+    """
+
+    preparation_result = build_requirement_pull_request_preparation_result(session_summary)
+    if preparation_result.status is RequirementPullRequestPreparationStatus.READY:
+        preparation_draft = preparation_result.preparation_draft
+        if preparation_draft is None:
+            raise ValueError("preparation_draft must be provided when status is READY.")
+        return RequirementPullRequestOpenResult(
+            status=RequirementPullRequestOpenStatus.READY,
+            summary_message=(
+                "Requirement pull request payload is ready and can transition to "
+                "STATE_REQUIREMENT_PR_OPEN."
+            ),
+            next_state=RequirementDiscoverySessionState.PR_OPEN,
+            source_prompt_summary=preparation_result.source_prompt_summary,
+            pull_request_create_payload=RequirementPullRequestCreatePayload(
+                pull_request_title=preparation_draft.pull_request_title,
+                pull_request_body_summary=preparation_draft.pull_request_summary,
+                updated_documents=preparation_draft.updated_documents,
+                target_state=RequirementDiscoverySessionState.PR_OPEN,
+            ),
+        )
+
+    if preparation_result.status is RequirementPullRequestPreparationStatus.INPUT_REQUIRED:
+        return RequirementPullRequestOpenResult(
+            status=RequirementPullRequestOpenStatus.INPUT_REQUIRED,
+            summary_message=(
+                "Continue requirement discovery with additional questions before opening "
+                "the requirement pull request."
+            ),
+            next_state=RequirementDiscoverySessionState.DISCOVERY_IN_PROGRESS,
+            source_prompt_summary=preparation_result.source_prompt_summary,
+            missing_information_items=preparation_result.missing_information_items,
+        )
+
+    return RequirementPullRequestOpenResult(
+        status=RequirementPullRequestOpenStatus.UNSUPPORTED_STATE,
+        summary_message=(
+            "Requirement pull request opening is not supported for workflow state "
+            f"{session_summary.current_state.value}."
+        ),
+        next_state=session_summary.current_state,
     )
 
 

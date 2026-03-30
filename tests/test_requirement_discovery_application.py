@@ -12,6 +12,7 @@ from shared_contracts import (
     RequirementDocumentType,
     RequirementDocumentUpdateDraftStatus,
     RequirementIssueContract,
+    RequirementPullRequestOpenStatus,
     RequirementPullRequestPreparationStatus,
     RequirementRepositoryContract,
 )
@@ -128,6 +129,12 @@ def test_generate_requirement_discovery_architect_response_returns_ready_prepara
         RequirementDocumentType.USE_CASES,
         RequirementDocumentType.ARCHITECTURE_DIAGRAM,
     }
+    assert result.pull_request_open_result is not None
+    assert result.pull_request_open_result.status is RequirementPullRequestOpenStatus.READY
+    assert result.pull_request_open_result.pull_request_create_payload is not None
+    assert result.pull_request_open_result.pull_request_create_payload.target_state is (
+        RequirementDiscoverySessionState.PR_OPEN
+    )
 
 
 def test_generate_requirement_discovery_architect_response_returns_invalid_input_failure() -> None:
