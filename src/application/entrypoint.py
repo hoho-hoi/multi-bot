@@ -13,12 +13,16 @@ from shared_contracts import (
     EngineerExecutionFocus,
     EngineerExecutionWorkItemContract,
     EngineerJobInput,
+    ImplementationBlockerResult,
+    ImplementationPullRequestOpenResult,
+    ImplementationPullRequestOpenStatus,
     IssueWorkItemContract,
     RequirementDiscoverySessionState,
     RequirementDiscoverySessionSummary,
     RequirementDocumentUpdateDraftResult,
     RequirementPullRequestOpenResult,
     RequirementPullRequestPreparationResult,
+    build_implementation_pull_request_open_result,
 )
 from worker_runtime import (
     EngineerBlockerReportingPolicy,
@@ -315,6 +319,72 @@ def start_engineer_execution_from_backlog_ready_issue(
     return _build_engineer_execution_success_result(
         start_result=start_result,
         bootstrap_result=bootstrap_result,
+    )
+
+
+def prepare_implementation_pull_request_from_engineer_execution(
+    *,
+    engineer_execution_result: EngineerExecutionIntegrationResult,
+    test_evidence: tuple[str, ...] | None,
+    implementation_blocker_result: ImplementationBlockerResult | None,
+) -> ImplementationPullRequestOpenResult:
+    """Builds the implementation pull request result from engineer execution output.
+
+    Args:
+        engineer_execution_result: Application-layer engineer execution output to inspect.
+        test_evidence: Local verification evidence collected after implementation completed.
+        implementation_blocker_result: Existing blocker result when implementation is blocked.
+
+    Returns:
+        A typed result describing whether the implementation pull request can be opened now.
+
+    Example:
+        result = prepare_implementation_pull_request_from_engineer_execution(
+            engineer_execution_result=engineer_execution_result,
+            test_evidence=("make test passed.", "make lint passed."),
+            implementation_blocker_result=None,
+        )
+        if result.status is ImplementationPullRequestOpenStatus.READY:
+            assert result.pull_request_create_payload is not None
+    """
+
+    if engineer_execution_result.failure is not None:
+        if (
+            engineer_execution_result.next_state
+            is RequirementDiscoverySessionState.IMPLEMENTATION_BLOCKED
+        ):
+            return build_implementation_pull_request_open_result(
+                current_state=engineer_execution_result.next_state,
+                work_item_contract=engineer_execution_result.work_item_contract,
+                test_evidence=test_evidence,
+                implementation_blocker_result=implementation_blocker_result,
+            )
+        if (
+            engineer_execution_result.next_state
+            is not RequirementDiscoverySessionState.ENGINEER_JOB_RUNNING
+        ):
+            return build_implementation_pull_request_open_result(
+                current_state=engineer_execution_result.next_state,
+                work_item_contract=engineer_execution_result.work_item_contract,
+                test_evidence=test_evidence,
+                implementation_blocker_result=implementation_blocker_result,
+            )
+
+        return ImplementationPullRequestOpenResult(
+            status=ImplementationPullRequestOpenStatus.INPUT_REQUIRED,
+            summary_message=(
+                "A successful engineer execution result is required before opening the "
+                "implementation pull request."
+            ),
+            next_state=engineer_execution_result.next_state,
+            missing_information_items=("successful engineer execution result",),
+        )
+
+    return build_implementation_pull_request_open_result(
+        current_state=engineer_execution_result.next_state,
+        work_item_contract=engineer_execution_result.work_item_contract,
+        test_evidence=test_evidence,
+        implementation_blocker_result=implementation_blocker_result,
     )
 
 
