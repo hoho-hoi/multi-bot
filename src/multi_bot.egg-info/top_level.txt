@@ -1,3 +1,0 @@
-control_plane
-shared_contracts
-worker_runtime
