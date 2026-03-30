@@ -2,6 +2,12 @@
 
 from shared_contracts.issue_contract import IssueWorkItemContract, RepositoryReference
 from shared_contracts.requirement_discovery_contract import (
+    ManagerRequirementReviewCycleContext,
+    ManagerRequirementReviewCycleTrigger,
+    ManagerRequirementReviewFocusArea,
+    ManagerRequirementReviewInput,
+    ManagerRequirementReviewInputResult,
+    ManagerRequirementReviewInputStatus,
     ProviderName,
     RequirementCommentContract,
     RequirementDiscoverySessionState,
@@ -20,6 +26,7 @@ from shared_contracts.requirement_discovery_contract import (
     RequirementPullRequestPreparationStatus,
     RequirementRepositoryContract,
     WorkerRoleName,
+    build_manager_requirement_review_input_result,
     build_requirement_document_update_draft_result,
     build_requirement_pull_request_open_result,
     build_requirement_pull_request_preparation_result,
@@ -27,6 +34,12 @@ from shared_contracts.requirement_discovery_contract import (
 
 __all__ = [
     "IssueWorkItemContract",
+    "ManagerRequirementReviewCycleContext",
+    "ManagerRequirementReviewCycleTrigger",
+    "ManagerRequirementReviewFocusArea",
+    "ManagerRequirementReviewInput",
+    "ManagerRequirementReviewInputResult",
+    "ManagerRequirementReviewInputStatus",
     "ProviderName",
     "RepositoryReference",
     "RequirementDocumentType",
@@ -46,6 +59,7 @@ __all__ = [
     "RequirementPullRequestPreparationStatus",
     "RequirementRepositoryContract",
     "WorkerRoleName",
+    "build_manager_requirement_review_input_result",
     "build_requirement_document_update_draft_result",
     "build_requirement_pull_request_open_result",
     "build_requirement_pull_request_preparation_result",
