@@ -1,7 +1,11 @@
 from shared_contracts import (
     ManagerRequirementReviewCycleContext,
     ManagerRequirementReviewCycleTrigger,
+    ManagerRequirementReviewDecision,
+    ManagerRequirementReviewDecisionFinding,
+    ManagerRequirementReviewDecisionFindingType,
     ManagerRequirementReviewFocusArea,
+    ManagerRequirementReviewInput,
     ManagerRequirementReviewInputStatus,
     RepositoryReference,
     RequirementCommentContract,
@@ -16,6 +20,7 @@ from shared_contracts import (
     RequirementPullRequestOpenStatus,
     RequirementPullRequestPreparationStatus,
     RequirementRepositoryContract,
+    build_manager_requirement_review_decision_result,
     build_manager_requirement_review_input_result,
     build_requirement_pull_request_open_result,
     build_requirement_pull_request_preparation_result,
@@ -62,6 +67,35 @@ def create_manager_requirement_review_cycle_context() -> ManagerRequirementRevie
         review_round_number=1,
         review_cycle_trigger=ManagerRequirementReviewCycleTrigger.PULL_REQUEST_OPENED,
         review_goal_summary="Initial requirement review for the opened pull request.",
+    )
+
+
+def create_manager_requirement_review_input() -> ManagerRequirementReviewInput:
+    """Creates strict manager review input for decision-engine tests."""
+
+    return ManagerRequirementReviewInput(
+        pull_request_title="docs: finalize requirements for issue #5",
+        pull_request_summary=(
+            "Update requirement overview, use cases, and architecture boundaries."
+        ),
+        updated_documents=(
+            RequirementDocumentType.REQUIREMENT,
+            RequirementDocumentType.USE_CASES,
+            RequirementDocumentType.ARCHITECTURE_DIAGRAM,
+        ),
+        documents_to_review=(
+            RequirementDocumentType.REQUIREMENT,
+            RequirementDocumentType.USE_CASES,
+            RequirementDocumentType.INTERACTION_FLOW,
+            RequirementDocumentType.ARCHITECTURE_DIAGRAM,
+        ),
+        review_cycle_context=create_manager_requirement_review_cycle_context(),
+        review_focus_areas=(
+            ManagerRequirementReviewFocusArea.REQUIREMENT_OVERVIEW,
+            ManagerRequirementReviewFocusArea.INTERACTION_AND_USE_CASE_ALIGNMENT,
+            ManagerRequirementReviewFocusArea.ARCHITECTURE_ALIGNMENT,
+            ManagerRequirementReviewFocusArea.DOCUMENT_CROSS_CHECK,
+        ),
     )
 
 
@@ -440,3 +474,79 @@ def test_build_manager_requirement_review_input_result_rejects_unsupported_state
 
     assert result.status is ManagerRequirementReviewInputStatus.UNSUPPORTED_STATE
     assert result.review_input is None
+
+
+def test_build_manager_review_decision_result_returns_approve() -> None:
+    review_input = create_manager_requirement_review_input()
+
+    result = build_manager_requirement_review_decision_result(
+        review_input=review_input,
+        review_findings=(),
+    )
+
+    assert result.decision is ManagerRequirementReviewDecision.APPROVE
+    assert result.requested_changes == ()
+    assert result.findings == ()
+    assert "approve" in result.review_body_draft.casefold()
+    assert review_input.pull_request_title in result.review_body_draft
+
+
+def test_build_manager_requirement_review_decision_result_returns_requested_changes() -> None:
+    review_input = create_manager_requirement_review_input()
+
+    result = build_manager_requirement_review_decision_result(
+        review_input=review_input,
+        review_findings=(
+            ManagerRequirementReviewDecisionFinding(
+                finding_type=ManagerRequirementReviewDecisionFindingType.MISSING_INFORMATION,
+                focus_area=ManagerRequirementReviewFocusArea.DOCUMENT_CROSS_CHECK,
+                summary=("docs/INTERACTION_FLOW.md does not describe the review-cycle retry path."),
+                related_documents=(RequirementDocumentType.INTERACTION_FLOW,),
+            ),
+            ManagerRequirementReviewDecisionFinding(
+                finding_type=ManagerRequirementReviewDecisionFindingType.CONTRADICTION,
+                focus_area=ManagerRequirementReviewFocusArea.ARCHITECTURE_ALIGNMENT,
+                summary=(
+                    "docs/ARCHITECTURE_DIAGRAM.md conflicts with docs/REQUIREMENT.md about "
+                    "who executes the manager review workflow."
+                ),
+                related_documents=(
+                    RequirementDocumentType.REQUIREMENT,
+                    RequirementDocumentType.ARCHITECTURE_DIAGRAM,
+                ),
+            ),
+        ),
+    )
+
+    assert result.decision is ManagerRequirementReviewDecision.REQUEST_CHANGES
+    assert result.findings == (
+        ManagerRequirementReviewDecisionFinding(
+            finding_type=ManagerRequirementReviewDecisionFindingType.MISSING_INFORMATION,
+            focus_area=ManagerRequirementReviewFocusArea.DOCUMENT_CROSS_CHECK,
+            summary="docs/INTERACTION_FLOW.md does not describe the review-cycle retry path.",
+            related_documents=(RequirementDocumentType.INTERACTION_FLOW,),
+        ),
+        ManagerRequirementReviewDecisionFinding(
+            finding_type=ManagerRequirementReviewDecisionFindingType.CONTRADICTION,
+            focus_area=ManagerRequirementReviewFocusArea.ARCHITECTURE_ALIGNMENT,
+            summary=(
+                "docs/ARCHITECTURE_DIAGRAM.md conflicts with docs/REQUIREMENT.md about "
+                "who executes the manager review workflow."
+            ),
+            related_documents=(
+                RequirementDocumentType.REQUIREMENT,
+                RequirementDocumentType.ARCHITECTURE_DIAGRAM,
+            ),
+        ),
+    )
+    assert result.requested_changes == (
+        (
+            "Address DOCUMENT_CROSS_CHECK: docs/INTERACTION_FLOW.md does not describe "
+            "the review-cycle retry path."
+        ),
+        (
+            "Address ARCHITECTURE_ALIGNMENT: docs/ARCHITECTURE_DIAGRAM.md conflicts with "
+            "docs/REQUIREMENT.md about who executes the manager review workflow."
+        ),
+    )
+    assert "request changes" in result.review_body_draft.casefold()

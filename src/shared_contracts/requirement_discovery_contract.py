@@ -70,6 +70,13 @@ class ManagerRequirementReviewInputStatus(StrEnum):
     UNSUPPORTED_STATE = "UNSUPPORTED_STATE"
 
 
+class ManagerRequirementReviewDecision(StrEnum):
+    """Enumerates the manager review decisions supported for requirement PRs."""
+
+    APPROVE = "APPROVE"
+    REQUEST_CHANGES = "REQUEST_CHANGES"
+
+
 class ManagerRequirementReviewCycleTrigger(StrEnum):
     """Enumerates events that can start another manager review cycle."""
 
@@ -87,6 +94,13 @@ class ManagerRequirementReviewFocusArea(StrEnum):
     ARCHITECTURE_ALIGNMENT = "ARCHITECTURE_ALIGNMENT"
     OPEN_DECISION_HANDLING = "OPEN_DECISION_HANDLING"
     DOCUMENT_CROSS_CHECK = "DOCUMENT_CROSS_CHECK"
+
+
+class ManagerRequirementReviewDecisionFindingType(StrEnum):
+    """Enumerates supported finding types from document consistency review."""
+
+    MISSING_INFORMATION = "MISSING_INFORMATION"
+    CONTRADICTION = "CONTRADICTION"
 
 
 @dataclass(frozen=True, slots=True)
@@ -528,6 +542,80 @@ class ManagerRequirementReviewInputResult:
         if self.missing_information_items:
             raise ValueError(
                 "missing_information_items must be empty when status is UNSUPPORTED_STATE."
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class ManagerRequirementReviewDecisionFinding:
+    """Represents one typed finding from the manager requirement review.
+
+    Attributes:
+        finding_type: Classification of the issue found during review.
+        focus_area: Review viewpoint where the issue was found.
+        summary: Human-readable explanation of the missing or conflicting detail.
+        related_documents: Documents that should be updated to resolve the issue.
+    """
+
+    finding_type: ManagerRequirementReviewDecisionFindingType
+    focus_area: ManagerRequirementReviewFocusArea
+    summary: str
+    related_documents: tuple[RequirementDocumentType, ...]
+
+    def __post_init__(self) -> None:
+        """Validates the review finding fields."""
+
+        if not self.summary.strip():
+            raise ValueError("summary must not be empty.")
+        if not self.related_documents:
+            raise ValueError("related_documents must not be empty.")
+        if len(set(self.related_documents)) != len(self.related_documents):
+            raise ValueError("related_documents must not contain duplicate values.")
+
+
+@dataclass(frozen=True, slots=True)
+class ManagerRequirementReviewDecisionResult:
+    """Represents the typed review decision and draft review message.
+
+    Attributes:
+        decision: Review decision to pass to the future PR review adapter.
+        summary_message: Human-readable summary of the decision.
+        review_body_draft: Draft review body ready for the future GitHub review step.
+        findings: Typed review findings when changes are required.
+        requested_changes: Human-readable change requests derived from the findings.
+    """
+
+    decision: ManagerRequirementReviewDecision
+    summary_message: str
+    review_body_draft: str
+    findings: tuple[ManagerRequirementReviewDecisionFinding, ...] = ()
+    requested_changes: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        """Validates decision-result consistency."""
+
+        if not self.summary_message.strip():
+            raise ValueError("summary_message must not be empty.")
+        if not self.review_body_draft.strip():
+            raise ValueError("review_body_draft must not be empty.")
+        if len(set(self.findings)) != len(self.findings):
+            raise ValueError("findings must not contain duplicate values.")
+        if any(not change_item.strip() for change_item in self.requested_changes):
+            raise ValueError("requested_changes must not contain empty values.")
+        if len(set(self.requested_changes)) != len(self.requested_changes):
+            raise ValueError("requested_changes must not contain duplicate values.")
+
+        if self.decision is ManagerRequirementReviewDecision.APPROVE:
+            if self.findings:
+                raise ValueError("findings must be empty when decision is APPROVE.")
+            if self.requested_changes:
+                raise ValueError("requested_changes must be empty when decision is APPROVE.")
+            return
+
+        if not self.findings:
+            raise ValueError("findings must not be empty when decision is REQUEST_CHANGES.")
+        if not self.requested_changes:
+            raise ValueError(
+                "requested_changes must not be empty when decision is REQUEST_CHANGES."
             )
 
 
@@ -1001,6 +1089,53 @@ def build_manager_requirement_review_input_result(
     )
 
 
+def build_manager_requirement_review_decision_result(
+    review_input: ManagerRequirementReviewInput,
+    review_findings: tuple[ManagerRequirementReviewDecisionFinding, ...],
+) -> ManagerRequirementReviewDecisionResult:
+    """Builds the minimum manager decision result for a requirement review.
+
+    Args:
+        review_input: Strict manager review input for the opened requirement PR.
+        review_findings: Typed findings from the document consistency review.
+
+    Returns:
+        A typed decision result that can later feed the PR review adapter.
+
+    Example:
+        result = build_manager_requirement_review_decision_result(
+            review_input=review_input,
+            review_findings=(),
+        )
+        assert result.decision is ManagerRequirementReviewDecision.APPROVE
+    """
+
+    _validate_manager_requirement_review_findings(review_input, review_findings)
+    if not review_findings:
+        return ManagerRequirementReviewDecisionResult(
+            decision=ManagerRequirementReviewDecision.APPROVE,
+            summary_message=("Requirement review passed the minimum document consistency checks."),
+            review_body_draft=_build_manager_requirement_review_approve_body_draft(review_input),
+        )
+
+    requested_changes = tuple(
+        _format_manager_requirement_requested_change(review_finding)
+        for review_finding in review_findings
+    )
+    return ManagerRequirementReviewDecisionResult(
+        decision=ManagerRequirementReviewDecision.REQUEST_CHANGES,
+        summary_message=(
+            "Requirement review found document consistency issues that require updates."
+        ),
+        review_body_draft=_build_manager_requirement_review_requested_changes_body_draft(
+            review_input=review_input,
+            requested_changes=requested_changes,
+        ),
+        findings=review_findings,
+        requested_changes=requested_changes,
+    )
+
+
 def _build_requirement_document_update_drafts(
     normalized_prompt_summary: str,
 ) -> tuple[RequirementDocumentUpdateDraft, ...]:
@@ -1046,6 +1181,65 @@ def _build_manager_requirement_review_documents(
         if updated_document not in ordered_documents:
             ordered_documents.append(updated_document)
     return tuple(ordered_documents)
+
+
+def _validate_manager_requirement_review_findings(
+    review_input: ManagerRequirementReviewInput,
+    review_findings: tuple[ManagerRequirementReviewDecisionFinding, ...],
+) -> None:
+    """Validates that review findings fit the declared review scope."""
+
+    supported_focus_areas = set(review_input.review_focus_areas)
+    review_documents = set(review_input.documents_to_review)
+    for review_finding in review_findings:
+        if review_finding.focus_area not in supported_focus_areas:
+            raise ValueError(
+                "review_findings must use focus areas listed in review_input.review_focus_areas."
+            )
+        if not set(review_finding.related_documents).issubset(review_documents):
+            raise ValueError(
+                "review_findings must reference only documents listed in "
+                "review_input.documents_to_review."
+            )
+
+
+def _build_manager_requirement_review_approve_body_draft(
+    review_input: ManagerRequirementReviewInput,
+) -> str:
+    """Builds the draft review body for an approval outcome."""
+
+    reviewed_documents = ", ".join(
+        document_type.value for document_type in review_input.documents_to_review
+    )
+    return (
+        f"Approve requirement review for `{review_input.pull_request_title}`.\n\n"
+        "The minimum document consistency checks passed for this review round.\n"
+        f"Reviewed documents: {reviewed_documents}."
+    )
+
+
+def _build_manager_requirement_review_requested_changes_body_draft(
+    review_input: ManagerRequirementReviewInput,
+    requested_changes: tuple[str, ...],
+) -> str:
+    """Builds the draft review body for a request-changes outcome."""
+
+    requested_change_lines = "\n".join(
+        f"- {requested_change}" for requested_change in requested_changes
+    )
+    return (
+        f"Request changes for `{review_input.pull_request_title}`.\n\n"
+        "Please resolve the following document consistency issues before approval:\n"
+        f"{requested_change_lines}"
+    )
+
+
+def _format_manager_requirement_requested_change(
+    review_finding: ManagerRequirementReviewDecisionFinding,
+) -> str:
+    """Formats one review finding into a requested-change item."""
+
+    return f"Address {review_finding.focus_area.value}: {review_finding.summary}"
 
 
 @dataclass(frozen=True, slots=True)
