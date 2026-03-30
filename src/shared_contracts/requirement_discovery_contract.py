@@ -10,6 +10,9 @@ class RequirementDiscoverySessionState(StrEnum):
     ISSUE_READY = "STATE_REQUIREMENT_ISSUE_READY"
     DISCOVERY_IN_PROGRESS = "STATE_REQUIREMENT_DISCOVERY_IN_PROGRESS"
     PR_OPEN = "STATE_REQUIREMENT_PR_OPEN"
+    MANAGER_REVIEW_IN_PROGRESS = "STATE_MANAGER_REVIEW_IN_PROGRESS"
+    REQUIREMENT_CHANGES_REQUESTED = "STATE_REQUIREMENT_CHANGES_REQUESTED"
+    REQUIREMENT_APPROVED = "STATE_REQUIREMENT_APPROVED"
 
 
 class WorkerRoleName(StrEnum):
@@ -64,6 +67,14 @@ class RequirementPullRequestOpenStatus(StrEnum):
 
 class ManagerRequirementReviewInputStatus(StrEnum):
     """Enumerates outcomes for manager requirement review input preparation."""
+
+    READY = "READY"
+    INPUT_REQUIRED = "INPUT_REQUIRED"
+    UNSUPPORTED_STATE = "UNSUPPORTED_STATE"
+
+
+class ManagerRequirementReviewExecutionStatus(StrEnum):
+    """Enumerates outcomes for manager review execution payload preparation."""
 
     READY = "READY"
     INPUT_REQUIRED = "INPUT_REQUIRED"
@@ -620,6 +631,94 @@ class ManagerRequirementReviewDecisionResult:
 
 
 @dataclass(frozen=True, slots=True)
+class ManagerRequirementReviewExecutionPayload:
+    """Represents the minimum payload needed to execute a requirement review.
+
+    Attributes:
+        pull_request_title: Requirement pull request title currently under review.
+        review_decision: Review decision to submit to the future GitHub adapter.
+        review_body: Review body that should be submitted with the review decision.
+    """
+
+    pull_request_title: str
+    review_decision: ManagerRequirementReviewDecision
+    review_body: str
+
+    def __post_init__(self) -> None:
+        """Validates the review execution payload."""
+
+        if not self.pull_request_title.strip():
+            raise ValueError("pull_request_title must not be empty.")
+        if not self.review_body.strip():
+            raise ValueError("review_body must not be empty.")
+
+
+@dataclass(frozen=True, slots=True)
+class ManagerRequirementReviewExecutionResult:
+    """Represents whether a manager requirement review can execute now.
+
+    Attributes:
+        status: High-level outcome for caller-side branching.
+        summary_message: Human-readable summary for the next workflow step.
+        next_state: Workflow state to continue with after interpreting the result.
+        missing_information_items: Missing inputs that must be supplied next.
+        review_execution_payload: Strict review execution payload when status is `READY`.
+    """
+
+    status: ManagerRequirementReviewExecutionStatus
+    summary_message: str
+    next_state: RequirementDiscoverySessionState
+    missing_information_items: tuple[str, ...] = ()
+    review_execution_payload: ManagerRequirementReviewExecutionPayload | None = None
+
+    def __post_init__(self) -> None:
+        """Validates result consistency."""
+
+        if not self.summary_message.strip():
+            raise ValueError("summary_message must not be empty.")
+        if any(not missing_item.strip() for missing_item in self.missing_information_items):
+            raise ValueError("missing_information_items must not contain empty values.")
+        if len(set(self.missing_information_items)) != len(self.missing_information_items):
+            raise ValueError("missing_information_items must not contain duplicate values.")
+        if not isinstance(self.next_state, RequirementDiscoverySessionState):
+            raise ValueError("next_state must be a RequirementDiscoverySessionState value.")
+
+        if self.status is ManagerRequirementReviewExecutionStatus.READY:
+            if self.review_execution_payload is None:
+                raise ValueError("review_execution_payload must be provided when status is READY.")
+            if self.missing_information_items:
+                raise ValueError("missing_information_items must be empty when status is READY.")
+            expected_next_state = _build_manager_requirement_review_next_state(
+                self.review_execution_payload.review_decision
+            )
+            if self.next_state is not expected_next_state:
+                raise ValueError(
+                    "next_state must match the decision carried by review_execution_payload."
+                )
+            return
+
+        if self.review_execution_payload is not None:
+            raise ValueError("review_execution_payload must be empty unless status is READY.")
+
+        if self.status is ManagerRequirementReviewExecutionStatus.INPUT_REQUIRED:
+            if not self.missing_information_items:
+                raise ValueError(
+                    "missing_information_items must not be empty when status is INPUT_REQUIRED."
+                )
+            if self.next_state is not RequirementDiscoverySessionState.MANAGER_REVIEW_IN_PROGRESS:
+                raise ValueError(
+                    "next_state must be STATE_MANAGER_REVIEW_IN_PROGRESS when status "
+                    "is INPUT_REQUIRED."
+                )
+            return
+
+        if self.missing_information_items:
+            raise ValueError(
+                "missing_information_items must be empty when status is UNSUPPORTED_STATE."
+            )
+
+
+@dataclass(frozen=True, slots=True)
 class RequirementDiscoverySessionSummary:
     """Summarizes the shared requirement discovery session state.
 
@@ -1136,6 +1235,69 @@ def build_manager_requirement_review_decision_result(
     )
 
 
+def build_manager_requirement_review_execution_result(
+    session_summary: RequirementDiscoverySessionSummary,
+    review_input: ManagerRequirementReviewInput | None,
+    decision_result: ManagerRequirementReviewDecisionResult | None,
+) -> ManagerRequirementReviewExecutionResult:
+    """Builds the minimum execution result for a manager requirement review.
+
+    Args:
+        session_summary: Current requirement discovery session snapshot.
+        review_input: Strict manager review input for the current review cycle.
+        decision_result: Typed decision result created from the review findings.
+
+    Returns:
+        A typed result describing whether the manager review can execute immediately.
+    """
+
+    if (
+        session_summary.current_state
+        is not RequirementDiscoverySessionState.MANAGER_REVIEW_IN_PROGRESS
+    ):
+        return ManagerRequirementReviewExecutionResult(
+            status=ManagerRequirementReviewExecutionStatus.UNSUPPORTED_STATE,
+            summary_message=(
+                "Manager requirement review execution is not supported for workflow state "
+                f"{session_summary.current_state.value}."
+            ),
+            next_state=session_summary.current_state,
+        )
+
+    missing_information_items: list[str] = []
+    if review_input is None:
+        missing_information_items.append("manager requirement review input")
+    if decision_result is None:
+        missing_information_items.append("manager requirement review decision result")
+
+    if missing_information_items:
+        return ManagerRequirementReviewExecutionResult(
+            status=ManagerRequirementReviewExecutionStatus.INPUT_REQUIRED,
+            summary_message=(
+                "Additional review metadata is required before manager review execution "
+                "can proceed."
+            ),
+            next_state=RequirementDiscoverySessionState.MANAGER_REVIEW_IN_PROGRESS,
+            missing_information_items=tuple(missing_information_items),
+        )
+
+    if review_input is None or decision_result is None:
+        raise ValueError("Required manager review execution inputs must be available.")
+
+    return ManagerRequirementReviewExecutionResult(
+        status=ManagerRequirementReviewExecutionStatus.READY,
+        summary_message=(
+            "Prepared the manager requirement review execution payload and next workflow state."
+        ),
+        next_state=_build_manager_requirement_review_next_state(decision_result.decision),
+        review_execution_payload=ManagerRequirementReviewExecutionPayload(
+            pull_request_title=review_input.pull_request_title,
+            review_decision=decision_result.decision,
+            review_body=decision_result.review_body_draft,
+        ),
+    )
+
+
 def _build_requirement_document_update_drafts(
     normalized_prompt_summary: str,
 ) -> tuple[RequirementDocumentUpdateDraft, ...]:
@@ -1181,6 +1343,16 @@ def _build_manager_requirement_review_documents(
         if updated_document not in ordered_documents:
             ordered_documents.append(updated_document)
     return tuple(ordered_documents)
+
+
+def _build_manager_requirement_review_next_state(
+    review_decision: ManagerRequirementReviewDecision,
+) -> RequirementDiscoverySessionState:
+    """Builds the next requirement workflow state for the review decision."""
+
+    if review_decision is ManagerRequirementReviewDecision.APPROVE:
+        return RequirementDiscoverySessionState.REQUIREMENT_APPROVED
+    return RequirementDiscoverySessionState.REQUIREMENT_CHANGES_REQUESTED
 
 
 def _validate_manager_requirement_review_findings(

@@ -4,6 +4,7 @@ from shared_contracts import (
     ManagerRequirementReviewDecision,
     ManagerRequirementReviewDecisionFinding,
     ManagerRequirementReviewDecisionFindingType,
+    ManagerRequirementReviewExecutionStatus,
     ManagerRequirementReviewFocusArea,
     ManagerRequirementReviewInput,
     ManagerRequirementReviewInputStatus,
@@ -21,6 +22,7 @@ from shared_contracts import (
     RequirementPullRequestPreparationStatus,
     RequirementRepositoryContract,
     build_manager_requirement_review_decision_result,
+    build_manager_requirement_review_execution_result,
     build_manager_requirement_review_input_result,
     build_requirement_pull_request_open_result,
     build_requirement_pull_request_preparation_result,
@@ -550,3 +552,118 @@ def test_build_manager_requirement_review_decision_result_returns_requested_chan
         ),
     )
     assert "request changes" in result.review_body_draft.casefold()
+
+
+def test_build_manager_requirement_review_execution_result_returns_approve_payload() -> None:
+    session_summary = RequirementDiscoverySessionSummary(
+        issue_contract=create_requirement_issue_contract(),
+        current_state=RequirementDiscoverySessionState.MANAGER_REVIEW_IN_PROGRESS,
+        latest_comment_contract=create_requirement_comment_contract(),
+        latest_prompt_summary="Manager is executing the requirement review decision.",
+    )
+    review_input = create_manager_requirement_review_input()
+    decision_result = build_manager_requirement_review_decision_result(
+        review_input=review_input,
+        review_findings=(),
+    )
+
+    result = build_manager_requirement_review_execution_result(
+        session_summary=session_summary,
+        review_input=review_input,
+        decision_result=decision_result,
+    )
+
+    assert result.status is ManagerRequirementReviewExecutionStatus.READY
+    assert result.missing_information_items == ()
+    assert result.next_state is RequirementDiscoverySessionState.REQUIREMENT_APPROVED
+    assert result.review_execution_payload is not None
+    assert (
+        result.review_execution_payload.review_decision is ManagerRequirementReviewDecision.APPROVE
+    )
+    assert result.review_execution_payload.review_body == decision_result.review_body_draft
+    assert result.review_execution_payload.pull_request_title == review_input.pull_request_title
+
+
+def test_build_manager_requirement_review_execution_result_returns_requested_changes_payload() -> (
+    None
+):
+    session_summary = RequirementDiscoverySessionSummary(
+        issue_contract=create_requirement_issue_contract(),
+        current_state=RequirementDiscoverySessionState.MANAGER_REVIEW_IN_PROGRESS,
+        latest_comment_contract=create_requirement_comment_contract(),
+        latest_prompt_summary="Manager is executing the requirement review decision.",
+    )
+    review_input = create_manager_requirement_review_input()
+    decision_result = build_manager_requirement_review_decision_result(
+        review_input=review_input,
+        review_findings=(
+            ManagerRequirementReviewDecisionFinding(
+                finding_type=ManagerRequirementReviewDecisionFindingType.MISSING_INFORMATION,
+                focus_area=ManagerRequirementReviewFocusArea.DOCUMENT_CROSS_CHECK,
+                summary="docs/INTERACTION_FLOW.md is missing the retry path.",
+                related_documents=(RequirementDocumentType.INTERACTION_FLOW,),
+            ),
+        ),
+    )
+
+    result = build_manager_requirement_review_execution_result(
+        session_summary=session_summary,
+        review_input=review_input,
+        decision_result=decision_result,
+    )
+
+    assert result.status is ManagerRequirementReviewExecutionStatus.READY
+    assert result.next_state is RequirementDiscoverySessionState.REQUIREMENT_CHANGES_REQUESTED
+    assert result.review_execution_payload is not None
+    assert (
+        result.review_execution_payload.review_decision
+        is ManagerRequirementReviewDecision.REQUEST_CHANGES
+    )
+    assert result.review_execution_payload.review_body == decision_result.review_body_draft
+
+
+def test_build_manager_requirement_review_execution_result_requires_inputs() -> None:
+    session_summary = RequirementDiscoverySessionSummary(
+        issue_contract=create_requirement_issue_contract(),
+        current_state=RequirementDiscoverySessionState.MANAGER_REVIEW_IN_PROGRESS,
+        latest_comment_contract=create_requirement_comment_contract(),
+        latest_prompt_summary="Manager is executing the requirement review decision.",
+    )
+
+    result = build_manager_requirement_review_execution_result(
+        session_summary=session_summary,
+        review_input=None,
+        decision_result=None,
+    )
+
+    assert result.status is ManagerRequirementReviewExecutionStatus.INPUT_REQUIRED
+    assert result.review_execution_payload is None
+    assert result.next_state is RequirementDiscoverySessionState.MANAGER_REVIEW_IN_PROGRESS
+    assert result.missing_information_items == (
+        "manager requirement review input",
+        "manager requirement review decision result",
+    )
+
+
+def test_build_manager_requirement_review_execution_result_rejects_unsupported_state() -> None:
+    session_summary = RequirementDiscoverySessionSummary(
+        issue_contract=create_requirement_issue_contract(),
+        current_state=RequirementDiscoverySessionState.PR_OPEN,
+        latest_comment_contract=create_requirement_comment_contract(),
+        latest_prompt_summary="Manager is executing the requirement review decision.",
+    )
+    review_input = create_manager_requirement_review_input()
+    decision_result = build_manager_requirement_review_decision_result(
+        review_input=review_input,
+        review_findings=(),
+    )
+
+    result = build_manager_requirement_review_execution_result(
+        session_summary=session_summary,
+        review_input=review_input,
+        decision_result=decision_result,
+    )
+
+    assert result.status is ManagerRequirementReviewExecutionStatus.UNSUPPORTED_STATE
+    assert result.review_execution_payload is None
+    assert result.next_state is RequirementDiscoverySessionState.PR_OPEN
