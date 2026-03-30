@@ -3,6 +3,7 @@
 from shared_contracts.issue_contract import IssueWorkItemContract, RepositoryReference
 from shared_contracts.requirement_discovery_contract import (
     EngineerExecutionFocus,
+    EngineerExecutionWorkItemContract,
     EngineerJobInput,
     EngineerJobInputResult,
     EngineerJobInputStatus,
@@ -15,6 +16,9 @@ from shared_contracts.requirement_discovery_contract import (
     ImplementationIssueCreationResult,
     ImplementationIssueCreationStatus,
     ImplementationIssueDraft,
+    ImplementationPullRequestCreatePayload,
+    ImplementationPullRequestOpenResult,
+    ImplementationPullRequestOpenStatus,
     ManagerRequirementReviewCycleContext,
     ManagerRequirementReviewCycleTrigger,
     ManagerRequirementReviewDecision,
@@ -58,6 +62,7 @@ from shared_contracts.requirement_discovery_contract import (
     build_implementation_blocker_result,
     build_implementation_issue_batching_result,
     build_implementation_issue_creation_result,
+    build_implementation_pull_request_open_result,
     build_manager_requirement_review_decision_result,
     build_manager_requirement_review_execution_result,
     build_manager_requirement_review_input_result,
@@ -70,10 +75,14 @@ from shared_contracts.requirement_discovery_contract import (
 
 __all__ = [
     "IssueWorkItemContract",
+    "EngineerExecutionWorkItemContract",
     "EngineerExecutionFocus",
     "EngineerJobInput",
     "EngineerJobInputResult",
     "EngineerJobInputStatus",
+    "ImplementationPullRequestCreatePayload",
+    "ImplementationPullRequestOpenResult",
+    "ImplementationPullRequestOpenStatus",
     "ImplementationBlockerDraft",
     "ImplementationBlockerResult",
     "ImplementationBlockerStatus",
@@ -123,6 +132,7 @@ __all__ = [
     "UserDecisionEscalationResult",
     "UserDecisionEscalationStatus",
     "WorkerRoleName",
+    "build_implementation_pull_request_open_result",
     "build_implementation_blocker_result",
     "build_implementation_issue_batching_result",
     "build_implementation_issue_creation_result",
