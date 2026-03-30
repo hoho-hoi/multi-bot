@@ -109,6 +109,20 @@ def test_build_implementation_pull_request_open_result_returns_ready_payload() -
     assert result.pull_request_create_payload.related_issue_identifier == (
         "example-owner/multi-bot#37"
     )
+    assert result.pull_request_create_payload.related_issue_title == (
+        "Prepare implementation PR creation payload from engineer execution output"
+    )
+    assert result.pull_request_create_payload.issue_overview == (
+        "Build the typed implementation pull request payload from the finished engineer "
+        "execution context."
+    )
+    assert result.pull_request_create_payload.acceptance_criteria == (
+        "Return a strict implementation pull request payload.",
+        "Keep the workflow blocked when Engineer reported an implementation blocker.",
+    )
+    assert result.pull_request_create_payload.single_pull_request_scope == (
+        "Limit the work to implementation pull request payload preparation."
+    )
 
 
 def test_build_implementation_pull_request_open_result_requires_running_inputs() -> None:
