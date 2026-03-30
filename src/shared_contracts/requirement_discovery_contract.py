@@ -14,6 +14,7 @@ class RequirementDiscoverySessionState(StrEnum):
     REQUIREMENT_CHANGES_REQUESTED = "STATE_REQUIREMENT_CHANGES_REQUESTED"
     REQUIREMENT_APPROVED = "STATE_REQUIREMENT_APPROVED"
     MILESTONE_PLANNING = "STATE_MILESTONE_PLANNING"
+    IMPLEMENTATION_BACKLOG_READY = "STATE_IMPLEMENTATION_BACKLOG_READY"
 
 
 class WorkerRoleName(StrEnum):
@@ -92,6 +93,14 @@ class MilestonePlanningStatus(StrEnum):
 
 class ImplementationIssueBatchingStatus(StrEnum):
     """Enumerates outcomes for batching milestone output into implementation issues."""
+
+    READY = "READY"
+    INPUT_REQUIRED = "INPUT_REQUIRED"
+    UNSUPPORTED_STATE = "UNSUPPORTED_STATE"
+
+
+class ImplementationIssueCreationStatus(StrEnum):
+    """Enumerates outcomes for preparing implementation issue creation payloads."""
 
     READY = "READY"
     INPUT_REQUIRED = "INPUT_REQUIRED"
@@ -1009,6 +1018,108 @@ class ImplementationIssueBatchingResult:
 
 
 @dataclass(frozen=True, slots=True)
+class ImplementationIssueCreatePayload:
+    """Represents the typed payload required to create an implementation issue.
+
+    Attributes:
+        issue_title: Suggested GitHub issue title.
+        issue_overview: Overview that should appear in the issue body.
+        acceptance_criteria: Verifiable outcomes copied into the issue body.
+        single_pull_request_scope: Explicit boundary that keeps the work within one pull request.
+        target_state: Workflow state reached once the implementation issue batch is ready.
+    """
+
+    issue_title: str
+    issue_overview: str
+    acceptance_criteria: tuple[str, ...]
+    single_pull_request_scope: str
+    target_state: RequirementDiscoverySessionState
+
+    def __post_init__(self) -> None:
+        """Validates the implementation issue creation payload."""
+
+        if not self.issue_title.strip():
+            raise ValueError("issue_title must not be empty.")
+        if not self.issue_overview.strip():
+            raise ValueError("issue_overview must not be empty.")
+        if not self.acceptance_criteria:
+            raise ValueError("acceptance_criteria must not be empty.")
+        if any(
+            not acceptance_criterion.strip() for acceptance_criterion in self.acceptance_criteria
+        ):
+            raise ValueError("acceptance_criteria must not contain empty values.")
+        if len(set(self.acceptance_criteria)) != len(self.acceptance_criteria):
+            raise ValueError("acceptance_criteria must not contain duplicate values.")
+        if not self.single_pull_request_scope.strip():
+            raise ValueError("single_pull_request_scope must not be empty.")
+        if self.target_state is not RequirementDiscoverySessionState.IMPLEMENTATION_BACKLOG_READY:
+            raise ValueError("target_state must be STATE_IMPLEMENTATION_BACKLOG_READY.")
+
+
+@dataclass(frozen=True, slots=True)
+class ImplementationIssueCreationResult:
+    """Represents whether implementation issue creation payloads can be emitted next.
+
+    Attributes:
+        status: High-level outcome for caller-side branching.
+        summary_message: Human-readable summary for orchestration.
+        next_state: Workflow state after interpreting the result.
+        missing_information_items: Missing inputs required before payload emission can proceed.
+        issue_create_payloads: Strict payloads for GitHub issue creation when ready.
+    """
+
+    status: ImplementationIssueCreationStatus
+    summary_message: str
+    next_state: RequirementDiscoverySessionState
+    missing_information_items: tuple[str, ...] = ()
+    issue_create_payloads: tuple[ImplementationIssueCreatePayload, ...] = ()
+
+    def __post_init__(self) -> None:
+        """Validates creation-result consistency."""
+
+        if not self.summary_message.strip():
+            raise ValueError("summary_message must not be empty.")
+        if any(not missing_item.strip() for missing_item in self.missing_information_items):
+            raise ValueError("missing_information_items must not contain empty values.")
+        if len(set(self.missing_information_items)) != len(self.missing_information_items):
+            raise ValueError("missing_information_items must not contain duplicate values.")
+        if len(set(self.issue_create_payloads)) != len(self.issue_create_payloads):
+            raise ValueError("issue_create_payloads must not contain duplicate values.")
+        if not isinstance(self.next_state, RequirementDiscoverySessionState):
+            raise ValueError("next_state must be a RequirementDiscoverySessionState value.")
+
+        if self.status is ImplementationIssueCreationStatus.READY:
+            if not self.issue_create_payloads:
+                raise ValueError("issue_create_payloads must not be empty when status is READY.")
+            if self.missing_information_items:
+                raise ValueError("missing_information_items must be empty when status is READY.")
+            if self.next_state is not RequirementDiscoverySessionState.IMPLEMENTATION_BACKLOG_READY:
+                raise ValueError(
+                    "next_state must be STATE_IMPLEMENTATION_BACKLOG_READY when status is READY."
+                )
+            return
+
+        if self.issue_create_payloads:
+            raise ValueError("issue_create_payloads must be empty unless status is READY.")
+
+        if self.status is ImplementationIssueCreationStatus.INPUT_REQUIRED:
+            if not self.missing_information_items:
+                raise ValueError(
+                    "missing_information_items must not be empty when status is INPUT_REQUIRED."
+                )
+            if self.next_state is not RequirementDiscoverySessionState.MILESTONE_PLANNING:
+                raise ValueError(
+                    "next_state must be STATE_MILESTONE_PLANNING when status is INPUT_REQUIRED."
+                )
+            return
+
+        if self.missing_information_items:
+            raise ValueError(
+                "missing_information_items must be empty when status is UNSUPPORTED_STATE."
+            )
+
+
+@dataclass(frozen=True, slots=True)
 class RequirementDiscoverySessionSummary:
     """Summarizes the shared requirement discovery session state.
 
@@ -1818,6 +1929,78 @@ def build_implementation_issue_batching_result(
         ),
         next_state=RequirementDiscoverySessionState.MILESTONE_PLANNING,
         implementation_issue_drafts=implementation_issue_drafts,
+    )
+
+
+def build_implementation_issue_creation_result(
+    session_summary: RequirementDiscoverySessionSummary,
+    batching_result: ImplementationIssueBatchingResult | None,
+) -> ImplementationIssueCreationResult:
+    """Builds typed GitHub issue creation payloads from batched implementation drafts.
+
+    Args:
+        session_summary: Current requirement discovery session snapshot.
+        batching_result: Strict batching result produced by the previous milestone step.
+
+    Returns:
+        A typed result describing whether implementation issue creation can proceed now.
+
+    Example:
+        result = build_implementation_issue_creation_result(
+            session_summary=session_summary,
+            batching_result=batching_result,
+        )
+        if result.status is ImplementationIssueCreationStatus.READY:
+            assert result.issue_create_payloads
+    """
+
+    if session_summary.current_state is not RequirementDiscoverySessionState.MILESTONE_PLANNING:
+        return ImplementationIssueCreationResult(
+            status=ImplementationIssueCreationStatus.UNSUPPORTED_STATE,
+            summary_message=(
+                "Implementation issue creation payload emission is not supported for workflow "
+                f"state {session_summary.current_state.value}."
+            ),
+            next_state=session_summary.current_state,
+        )
+
+    if (
+        batching_result is None
+        or batching_result.status is not ImplementationIssueBatchingStatus.READY
+    ):
+        missing_information_items = (
+            ("implementation issue drafts",)
+            if batching_result is None
+            else batching_result.missing_information_items or ("implementation issue drafts",)
+        )
+        return ImplementationIssueCreationResult(
+            status=ImplementationIssueCreationStatus.INPUT_REQUIRED,
+            summary_message=(
+                "Implementation issue drafts are required before GitHub issue creation payloads "
+                "can be emitted."
+            ),
+            next_state=RequirementDiscoverySessionState.MILESTONE_PLANNING,
+            missing_information_items=missing_information_items,
+        )
+
+    issue_create_payloads = tuple(
+        ImplementationIssueCreatePayload(
+            issue_title=implementation_issue_draft.issue_title,
+            issue_overview=implementation_issue_draft.issue_summary,
+            acceptance_criteria=implementation_issue_draft.acceptance_criteria,
+            single_pull_request_scope=implementation_issue_draft.single_pull_request_scope,
+            target_state=RequirementDiscoverySessionState.IMPLEMENTATION_BACKLOG_READY,
+        )
+        for implementation_issue_draft in batching_result.implementation_issue_drafts
+    )
+    return ImplementationIssueCreationResult(
+        status=ImplementationIssueCreationStatus.READY,
+        summary_message=(
+            f"Prepared {len(issue_create_payloads)} implementation issue creation payloads and "
+            "transitioned the workflow to STATE_IMPLEMENTATION_BACKLOG_READY."
+        ),
+        next_state=RequirementDiscoverySessionState.IMPLEMENTATION_BACKLOG_READY,
+        issue_create_payloads=issue_create_payloads,
     )
 
 

@@ -1,5 +1,7 @@
 from shared_contracts import (
     ImplementationIssueBatchingStatus,
+    ImplementationIssueCreatePayload,
+    ImplementationIssueCreationStatus,
     ManagerRequirementReviewCycleContext,
     ManagerRequirementReviewCycleTrigger,
     ManagerRequirementReviewDecision,
@@ -28,6 +30,7 @@ from shared_contracts import (
     RequirementRepositoryContract,
     UseCaseIdentifier,
     build_implementation_issue_batching_result,
+    build_implementation_issue_creation_result,
     build_manager_requirement_review_decision_result,
     build_manager_requirement_review_execution_result,
     build_manager_requirement_review_input_result,
@@ -941,3 +944,99 @@ def test_build_implementation_issue_batching_result_requires_supported_issue_dra
     assert result.status is ImplementationIssueBatchingStatus.INPUT_REQUIRED
     assert result.implementation_issue_drafts == ()
     assert result.missing_information_items == ("supported implementation issue drafts",)
+
+
+def test_build_implementation_issue_creation_result_returns_ready_payloads() -> None:
+    session_summary = RequirementDiscoverySessionSummary(
+        issue_contract=create_requirement_issue_contract(),
+        current_state=RequirementDiscoverySessionState.MILESTONE_PLANNING,
+        latest_comment_contract=create_requirement_comment_contract(),
+        latest_prompt_summary=(
+            "Manager is splitting the first milestone into implementation issues."
+        ),
+    )
+    milestone_planning_result = build_milestone_planning_result(
+        session_summary=RequirementDiscoverySessionSummary(
+            issue_contract=create_requirement_issue_contract(),
+            current_state=RequirementDiscoverySessionState.REQUIREMENT_APPROVED,
+            latest_comment_contract=create_requirement_comment_contract(),
+            latest_prompt_summary="Requirement approval completed and delivery planning can begin.",
+        ),
+        requirement_review_execution_result=create_requirement_approved_review_execution_result(),
+        requirement_documents_summary=(
+            "The approved requirements prioritize the manager planning workflow that defines "
+            "the first milestone, creates implementation issues, and hands the backlog to "
+            "engineer execution and review."
+        ),
+    )
+    batching_result = build_implementation_issue_batching_result(
+        session_summary=session_summary,
+        milestone_planning_result=milestone_planning_result,
+    )
+
+    result = build_implementation_issue_creation_result(
+        session_summary=session_summary,
+        batching_result=batching_result,
+    )
+
+    assert result.status is ImplementationIssueCreationStatus.READY
+    assert result.next_state is RequirementDiscoverySessionState.IMPLEMENTATION_BACKLOG_READY
+    assert result.missing_information_items == ()
+    assert len(result.issue_create_payloads) == 2
+
+    first_payload = result.issue_create_payloads[0]
+    assert isinstance(first_payload, ImplementationIssueCreatePayload)
+    assert first_payload.target_state is (
+        RequirementDiscoverySessionState.IMPLEMENTATION_BACKLOG_READY
+    )
+    assert first_payload.issue_title == batching_result.implementation_issue_drafts[0].issue_title
+    assert first_payload.issue_overview == (
+        batching_result.implementation_issue_drafts[0].issue_summary
+    )
+    assert first_payload.acceptance_criteria == (
+        batching_result.implementation_issue_drafts[0].acceptance_criteria
+    )
+    assert first_payload.single_pull_request_scope == (
+        batching_result.implementation_issue_drafts[0].single_pull_request_scope
+    )
+
+
+def test_build_implementation_issue_creation_result_requires_issue_drafts() -> None:
+    session_summary = RequirementDiscoverySessionSummary(
+        issue_contract=create_requirement_issue_contract(),
+        current_state=RequirementDiscoverySessionState.MILESTONE_PLANNING,
+        latest_comment_contract=create_requirement_comment_contract(),
+        latest_prompt_summary=(
+            "Manager is splitting the first milestone into implementation issues."
+        ),
+    )
+
+    result = build_implementation_issue_creation_result(
+        session_summary=session_summary,
+        batching_result=None,
+    )
+
+    assert result.status is ImplementationIssueCreationStatus.INPUT_REQUIRED
+    assert result.next_state is RequirementDiscoverySessionState.MILESTONE_PLANNING
+    assert result.issue_create_payloads == ()
+    assert result.missing_information_items == ("implementation issue drafts",)
+
+
+def test_build_implementation_issue_creation_result_rejects_unsupported_state() -> None:
+    session_summary = RequirementDiscoverySessionSummary(
+        issue_contract=create_requirement_issue_contract(),
+        current_state=RequirementDiscoverySessionState.PR_OPEN,
+        latest_comment_contract=create_requirement_comment_contract(),
+        latest_prompt_summary=(
+            "Manager is splitting the first milestone into implementation issues."
+        ),
+    )
+
+    result = build_implementation_issue_creation_result(
+        session_summary=session_summary,
+        batching_result=None,
+    )
+
+    assert result.status is ImplementationIssueCreationStatus.UNSUPPORTED_STATE
+    assert result.next_state is RequirementDiscoverySessionState.PR_OPEN
+    assert result.issue_create_payloads == ()
