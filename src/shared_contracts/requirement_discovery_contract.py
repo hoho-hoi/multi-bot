@@ -1298,6 +1298,76 @@ class EngineerJobInputResult:
 
 
 @dataclass(frozen=True, slots=True)
+class EngineerExecutionWorkItemContract:
+    """Represents the strict work item required to start engineer execution.
+
+    Attributes:
+        issue_work_item_contract: Repository-qualified implementation issue metadata.
+        engineer_job_input: Strict engineer job input prepared from the backlog-ready issue.
+        execution_focus: Initial execution focus derived from the engineer job input.
+        role_name: Worker role selected for execution. Must be `engineer`.
+        provider_name: Provider adapter selected by the control-plane.
+
+    Example:
+        work_item_contract = EngineerExecutionWorkItemContract.create_from_issue_and_job_input(
+            issue_work_item_contract=issue_work_item_contract,
+            engineer_job_input=engineer_job_input,
+        )
+        assert work_item_contract.role_name is WorkerRoleName.ENGINEER
+    """
+
+    issue_work_item_contract: IssueWorkItemContract
+    engineer_job_input: EngineerJobInput
+    execution_focus: EngineerExecutionFocus
+    role_name: WorkerRoleName = WorkerRoleName.ENGINEER
+    provider_name: ProviderName = ProviderName.CURSOR
+
+    def __post_init__(self) -> None:
+        """Validates issue metadata and execution focus consistency."""
+
+        if self.role_name is not WorkerRoleName.ENGINEER:
+            raise ValueError("role_name must be engineer for EngineerExecutionWorkItemContract.")
+        if not isinstance(self.provider_name, ProviderName):
+            raise ValueError("provider_name must be a ProviderName value.")
+        if self.issue_work_item_contract.issue_title != self.engineer_job_input.issue_title:
+            raise ValueError(
+                "issue_work_item_contract.issue_title must match engineer_job_input.issue_title."
+            )
+
+        expected_execution_focus = self.engineer_job_input.build_initial_execution_focus()
+        if self.execution_focus != expected_execution_focus:
+            raise ValueError(
+                "execution_focus must match engineer_job_input.build_initial_execution_focus()."
+            )
+
+    @classmethod
+    def create_from_issue_and_job_input(
+        cls,
+        *,
+        issue_work_item_contract: IssueWorkItemContract,
+        engineer_job_input: EngineerJobInput,
+        provider_name: ProviderName = ProviderName.CURSOR,
+    ) -> "EngineerExecutionWorkItemContract":
+        """Builds a validated engineer execution work item from strict input models.
+
+        Args:
+            issue_work_item_contract: Backlog-ready implementation issue metadata.
+            engineer_job_input: Strict engineer job input prepared for the issue.
+            provider_name: Provider adapter selected by the control-plane.
+
+        Returns:
+            A validated engineer execution work item contract.
+        """
+
+        return cls(
+            issue_work_item_contract=issue_work_item_contract,
+            engineer_job_input=engineer_job_input,
+            execution_focus=engineer_job_input.build_initial_execution_focus(),
+            provider_name=provider_name,
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class ImplementationBlockerDraft:
     """Represents a typed implementation blocker draft for issue comment creation.
 
