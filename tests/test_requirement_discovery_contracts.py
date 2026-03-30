@@ -1050,16 +1050,14 @@ def test_build_implementation_issue_creation_result_rejects_unsupported_state() 
 def test_build_engineer_job_input_result_returns_ready_input() -> None:
     result = build_engineer_job_input_result(
         ImplementationIssueCreatePayload(
-            target_use_case=UseCaseIdentifier.IMPLEMENT_ISSUE_WITH_ENGINEER,
-            issue_title="Implement engineer job input builder",
-            issue_overview=(
-                "Build the strict engineer job input model from one backlog-ready issue payload."
-            ),
+            target_use_case=UseCaseIdentifier.ORCHESTRATE_DELIVERY_WITH_MANAGER,
+            issue_title="Implement manager milestone planning issue batching",
+            issue_overview="Prepare manager backlog issue payloads.",
             acceptance_criteria=(
-                "Return a strict engineer job input model.",
-                "Preserve the issue acceptance criteria for engineer execution.",
+                "Return the manager issue payload.",
+                "Keep the manager issue within one pull request.",
             ),
-            single_pull_request_scope="Limit the work to one engineer job input model.",
+            single_pull_request_scope="Limit the work to manager batching.",
             target_state=RequirementDiscoverySessionState.IMPLEMENTATION_BACKLOG_READY,
         )
     )
@@ -1068,13 +1066,16 @@ def test_build_engineer_job_input_result_returns_ready_input() -> None:
     assert result.missing_information_items == ()
     assert result.engineer_job_input is not None
     assert isinstance(result.engineer_job_input, EngineerJobInput)
-    assert result.engineer_job_input.target_use_case is (
-        UseCaseIdentifier.IMPLEMENT_ISSUE_WITH_ENGINEER
+    assert result.engineer_job_input.related_issue_use_case is (
+        UseCaseIdentifier.ORCHESTRATE_DELIVERY_WITH_MANAGER
     )
 
     execution_focus = result.engineer_job_input.build_initial_execution_focus()
     assert isinstance(execution_focus, EngineerExecutionFocus)
     assert execution_focus.use_case_identifier is UseCaseIdentifier.IMPLEMENT_ISSUE_WITH_ENGINEER
+    assert execution_focus.related_issue_use_case is (
+        UseCaseIdentifier.ORCHESTRATE_DELIVERY_WITH_MANAGER
+    )
     assert execution_focus.focus_summary == result.engineer_job_input.issue_overview
     assert execution_focus.acceptance_criteria == result.engineer_job_input.acceptance_criteria
 
@@ -1090,11 +1091,11 @@ def test_build_engineer_job_input_result_requires_issue_create_payload() -> None
 def test_build_engineer_job_input_result_rejects_unsupported_use_case() -> None:
     result = build_engineer_job_input_result(
         ImplementationIssueCreatePayload(
-            target_use_case=UseCaseIdentifier.ORCHESTRATE_DELIVERY_WITH_MANAGER,
-            issue_title="Implement manager milestone planning issue batching",
-            issue_overview="Prepare manager backlog issue payloads.",
-            acceptance_criteria=("Return the manager issue payload.",),
-            single_pull_request_scope="Limit the work to manager batching.",
+            target_use_case=UseCaseIdentifier.DEFINE_REQUIREMENTS_WITH_ARCHITECT,
+            issue_title="Restate architect discovery outcome",
+            issue_overview="This payload should not be executable by Engineer.",
+            acceptance_criteria=("Do not create an engineer job input.",),
+            single_pull_request_scope="Limit the work to architect-only requirements discovery.",
             target_state=RequirementDiscoverySessionState.IMPLEMENTATION_BACKLOG_READY,
         )
     )

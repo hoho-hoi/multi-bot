@@ -1137,12 +1137,14 @@ class EngineerExecutionFocus:
 
     Attributes:
         use_case_identifier: Engineer use case that the job must execute.
+        related_issue_use_case: Use case advanced by the source implementation issue.
         focus_summary: Human-readable summary of the first implementation objective.
         acceptance_criteria: Acceptance criteria preserved from the implementation issue.
         single_pull_request_scope: Explicit boundary for the first implementation slice.
     """
 
     use_case_identifier: UseCaseIdentifier
+    related_issue_use_case: UseCaseIdentifier
     focus_summary: str
     acceptance_criteria: tuple[str, ...]
     single_pull_request_scope: str
@@ -1175,7 +1177,7 @@ class EngineerJobInput:
         issue_overview: Overview that explains the implementation slice.
         acceptance_criteria: Verifiable outcomes that the engineer must satisfy.
         single_pull_request_scope: Explicit boundary that keeps execution within one PR.
-        target_use_case: Use case that this engineer job must execute.
+        related_issue_use_case: Use case advanced by the source implementation issue.
 
     Example:
         engineer_job_input = EngineerJobInput(
@@ -1183,7 +1185,7 @@ class EngineerJobInput:
             issue_overview="Build the strict engineer job input model.",
             acceptance_criteria=("Return a strict engineer job input model.",),
             single_pull_request_scope="Limit the work to one engineer job input model.",
-            target_use_case=UseCaseIdentifier.IMPLEMENT_ISSUE_WITH_ENGINEER,
+            related_issue_use_case=UseCaseIdentifier.ORCHESTRATE_DELIVERY_WITH_MANAGER,
         )
         execution_focus = engineer_job_input.build_initial_execution_focus()
         assert execution_focus.use_case_identifier is (
@@ -1195,7 +1197,7 @@ class EngineerJobInput:
     issue_overview: str
     acceptance_criteria: tuple[str, ...]
     single_pull_request_scope: str
-    target_use_case: UseCaseIdentifier
+    related_issue_use_case: UseCaseIdentifier
 
     def __post_init__(self) -> None:
         """Validates the engineer job input."""
@@ -1214,14 +1216,13 @@ class EngineerJobInput:
             raise ValueError("acceptance_criteria must not contain duplicate values.")
         if not self.single_pull_request_scope.strip():
             raise ValueError("single_pull_request_scope must not be empty.")
-        if self.target_use_case is not UseCaseIdentifier.IMPLEMENT_ISSUE_WITH_ENGINEER:
-            raise ValueError("target_use_case must be UC_IMPLEMENT_ISSUE_WITH_ENGINEER.")
 
     def build_initial_execution_focus(self) -> EngineerExecutionFocus:
         """Builds the initial engineer execution focus from this input model."""
 
         return EngineerExecutionFocus(
-            use_case_identifier=self.target_use_case,
+            use_case_identifier=UseCaseIdentifier.IMPLEMENT_ISSUE_WITH_ENGINEER,
+            related_issue_use_case=self.related_issue_use_case,
             focus_summary=self.issue_overview,
             acceptance_criteria=self.acceptance_criteria,
             single_pull_request_scope=self.single_pull_request_scope,
@@ -2190,7 +2191,10 @@ def build_engineer_job_input_result(
             missing_information_items=("implementation issue create payload",),
         )
 
-    if issue_create_payload.target_use_case is not UseCaseIdentifier.IMPLEMENT_ISSUE_WITH_ENGINEER:
+    if issue_create_payload.target_use_case not in {
+        UseCaseIdentifier.ORCHESTRATE_DELIVERY_WITH_MANAGER,
+        UseCaseIdentifier.IMPLEMENT_ISSUE_WITH_ENGINEER,
+    }:
         return EngineerJobInputResult(
             status=EngineerJobInputStatus.UNSUPPORTED_STATE,
             summary_message=(
@@ -2209,7 +2213,7 @@ def build_engineer_job_input_result(
             issue_overview=issue_create_payload.issue_overview,
             acceptance_criteria=issue_create_payload.acceptance_criteria,
             single_pull_request_scope=issue_create_payload.single_pull_request_scope,
-            target_use_case=issue_create_payload.target_use_case,
+            related_issue_use_case=issue_create_payload.target_use_case,
         ),
     )
 
