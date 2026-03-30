@@ -2,6 +2,9 @@
 
 from shared_contracts.issue_contract import IssueWorkItemContract, RepositoryReference
 from shared_contracts.requirement_discovery_contract import (
+    ImplementationIssueBatchingResult,
+    ImplementationIssueBatchingStatus,
+    ImplementationIssueDraft,
     ManagerRequirementReviewCycleContext,
     ManagerRequirementReviewCycleTrigger,
     ManagerRequirementReviewDecision,
@@ -38,6 +41,7 @@ from shared_contracts.requirement_discovery_contract import (
     RequirementRepositoryContract,
     UseCaseIdentifier,
     WorkerRoleName,
+    build_implementation_issue_batching_result,
     build_manager_requirement_review_decision_result,
     build_manager_requirement_review_execution_result,
     build_manager_requirement_review_input_result,
@@ -49,6 +53,9 @@ from shared_contracts.requirement_discovery_contract import (
 
 __all__ = [
     "IssueWorkItemContract",
+    "ImplementationIssueBatchingResult",
+    "ImplementationIssueBatchingStatus",
+    "ImplementationIssueDraft",
     "ManagerRequirementReviewDecision",
     "ManagerRequirementReviewDecisionFinding",
     "ManagerRequirementReviewDecisionFindingType",
@@ -86,6 +93,7 @@ __all__ = [
     "RequirementRepositoryContract",
     "UseCaseIdentifier",
     "WorkerRoleName",
+    "build_implementation_issue_batching_result",
     "build_manager_requirement_review_decision_result",
     "build_manager_requirement_review_execution_result",
     "build_manager_requirement_review_input_result",

@@ -90,6 +90,14 @@ class MilestonePlanningStatus(StrEnum):
     UNSUPPORTED_STATE = "UNSUPPORTED_STATE"
 
 
+class ImplementationIssueBatchingStatus(StrEnum):
+    """Enumerates outcomes for batching milestone output into implementation issues."""
+
+    READY = "READY"
+    INPUT_REQUIRED = "INPUT_REQUIRED"
+    UNSUPPORTED_STATE = "UNSUPPORTED_STATE"
+
+
 class UseCaseIdentifier(StrEnum):
     """Enumerates supported use-case identifiers from `docs/USE_CASES.md`."""
 
@@ -887,6 +895,120 @@ class MilestonePlanningResult:
 
 
 @dataclass(frozen=True, slots=True)
+class ImplementationIssueDraft:
+    """Represents one engineer-sized implementation issue draft.
+
+    Attributes:
+        target_use_case: Use case that this draft advances from the milestone plan.
+        issue_title: Suggested GitHub issue title for the draft.
+        issue_summary: Human-readable issue overview for Manager review and Engineer handoff.
+        acceptance_criteria: Verifiable outcomes that keep the work within one pull request.
+        single_pull_request_scope: Explicit boundary that defines the intended single-PR slice.
+
+    Example:
+        implementation_issue_draft = ImplementationIssueDraft(
+            target_use_case=UseCaseIdentifier.ORCHESTRATE_DELIVERY_WITH_MANAGER,
+            issue_title="Implement manager milestone backlog drafting",
+            issue_summary="Convert the first milestone into engineer-ready issue drafts.",
+            acceptance_criteria=("A strict batching result is returned.",),
+            single_pull_request_scope="Limit the change to typed batching only.",
+        )
+        assert implementation_issue_draft.target_use_case is (
+            UseCaseIdentifier.ORCHESTRATE_DELIVERY_WITH_MANAGER
+        )
+    """
+
+    target_use_case: UseCaseIdentifier
+    issue_title: str
+    issue_summary: str
+    acceptance_criteria: tuple[str, ...]
+    single_pull_request_scope: str
+
+    def __post_init__(self) -> None:
+        """Validates issue-draft consistency."""
+
+        if not self.issue_title.strip():
+            raise ValueError("issue_title must not be empty.")
+        if not self.issue_summary.strip():
+            raise ValueError("issue_summary must not be empty.")
+        if not self.acceptance_criteria:
+            raise ValueError("acceptance_criteria must not be empty.")
+        if any(
+            not acceptance_criterion.strip() for acceptance_criterion in self.acceptance_criteria
+        ):
+            raise ValueError("acceptance_criteria must not contain empty values.")
+        if len(set(self.acceptance_criteria)) != len(self.acceptance_criteria):
+            raise ValueError("acceptance_criteria must not contain duplicate values.")
+        if not self.single_pull_request_scope.strip():
+            raise ValueError("single_pull_request_scope must not be empty.")
+
+
+@dataclass(frozen=True, slots=True)
+class ImplementationIssueBatchingResult:
+    """Represents whether milestone output can be split into implementation issues.
+
+    Attributes:
+        status: High-level batching outcome for caller-side branching.
+        summary_message: Human-readable batching summary for orchestration.
+        next_state: Workflow state after interpreting the batching result.
+        missing_information_items: Missing inputs required before batching can proceed.
+        implementation_issue_drafts: Engineer-ready drafts when status is `READY`.
+    """
+
+    status: ImplementationIssueBatchingStatus
+    summary_message: str
+    next_state: RequirementDiscoverySessionState
+    missing_information_items: tuple[str, ...] = ()
+    implementation_issue_drafts: tuple[ImplementationIssueDraft, ...] = ()
+
+    def __post_init__(self) -> None:
+        """Validates batching-result consistency."""
+
+        if not self.summary_message.strip():
+            raise ValueError("summary_message must not be empty.")
+        if any(not missing_item.strip() for missing_item in self.missing_information_items):
+            raise ValueError("missing_information_items must not contain empty values.")
+        if len(set(self.missing_information_items)) != len(self.missing_information_items):
+            raise ValueError("missing_information_items must not contain duplicate values.")
+        if len(set(self.implementation_issue_drafts)) != len(self.implementation_issue_drafts):
+            raise ValueError("implementation_issue_drafts must not contain duplicate values.")
+        if not isinstance(self.next_state, RequirementDiscoverySessionState):
+            raise ValueError("next_state must be a RequirementDiscoverySessionState value.")
+
+        if self.status is ImplementationIssueBatchingStatus.READY:
+            if not self.implementation_issue_drafts:
+                raise ValueError(
+                    "implementation_issue_drafts must not be empty when status is READY."
+                )
+            if self.missing_information_items:
+                raise ValueError("missing_information_items must be empty when status is READY.")
+            if self.next_state is not RequirementDiscoverySessionState.MILESTONE_PLANNING:
+                raise ValueError(
+                    "next_state must be STATE_MILESTONE_PLANNING when status is READY."
+                )
+            return
+
+        if self.implementation_issue_drafts:
+            raise ValueError("implementation_issue_drafts must be empty unless status is READY.")
+
+        if self.status is ImplementationIssueBatchingStatus.INPUT_REQUIRED:
+            if not self.missing_information_items:
+                raise ValueError(
+                    "missing_information_items must not be empty when status is INPUT_REQUIRED."
+                )
+            if self.next_state is not RequirementDiscoverySessionState.MILESTONE_PLANNING:
+                raise ValueError(
+                    "next_state must be STATE_MILESTONE_PLANNING when status is INPUT_REQUIRED."
+                )
+            return
+
+        if self.missing_information_items:
+            raise ValueError(
+                "missing_information_items must be empty when status is UNSUPPORTED_STATE."
+            )
+
+
+@dataclass(frozen=True, slots=True)
 class RequirementDiscoverySessionSummary:
     """Summarizes the shared requirement discovery session state.
 
@@ -1087,6 +1209,56 @@ _MILESTONE_USE_CASE_RULES = (
         ),
     ),
 )
+
+
+@dataclass(frozen=True, slots=True)
+class _ImplementationIssueDraftRule:
+    """Defines the reusable draft template for one implementation use case."""
+
+    issue_title: str
+    issue_summary_prefix: str
+    acceptance_criteria: tuple[str, ...]
+    single_pull_request_scope: str
+
+
+_IMPLEMENTATION_ISSUE_DRAFT_RULES = {
+    UseCaseIdentifier.ORCHESTRATE_DELIVERY_WITH_MANAGER: _ImplementationIssueDraftRule(
+        issue_title="Implement manager milestone planning issue batching",
+        issue_summary_prefix=(
+            "Enable Manager delivery orchestration to convert the first milestone into "
+            "engineer-ready implementation issue drafts."
+        ),
+        acceptance_criteria=(
+            "Return a typed batching result that creates an implementation issue draft for "
+            "manager milestone planning from the milestone output.",
+            "Include a draft title, overview, and acceptance criteria that an engineer can "
+            "complete within one pull request.",
+            "Keep the change limited to batching logic and do not call the GitHub issue "
+            "creation API.",
+        ),
+        single_pull_request_scope=(
+            "Limit the work to milestone-to-issue batching for manager planning in a single "
+            "pull request."
+        ),
+    ),
+    UseCaseIdentifier.IMPLEMENT_ISSUE_WITH_ENGINEER: _ImplementationIssueDraftRule(
+        issue_title="Implement engineer handoff for milestone issue drafts",
+        issue_summary_prefix=(
+            "Prepare the first engineer execution slice so the prioritized milestone draft can "
+            "be implemented and reviewed end to end."
+        ),
+        acceptance_criteria=(
+            "Return a typed implementation issue draft for the engineer execution handoff from "
+            "the milestone output.",
+            "Include acceptance criteria that cover engineer execution, validation, and "
+            "implementation pull request handoff.",
+            "Keep the issue scope to a single pull request-sized delivery slice.",
+        ),
+        single_pull_request_scope=(
+            "Limit the work to the first engineer execution handoff in a single pull request."
+        ),
+    ),
+}
 
 
 def build_requirement_document_update_draft_result(
@@ -1576,6 +1748,79 @@ def build_milestone_planning_result(
     )
 
 
+def build_implementation_issue_batching_result(
+    session_summary: RequirementDiscoverySessionSummary,
+    milestone_planning_result: MilestonePlanningResult | None,
+) -> ImplementationIssueBatchingResult:
+    """Builds engineer-ready implementation issue drafts from milestone planning output.
+
+    Args:
+        session_summary: Current requirement discovery session snapshot.
+        milestone_planning_result: Strict milestone planning result produced by the previous step.
+
+    Returns:
+        A typed result describing whether implementation issue drafting can proceed now.
+
+    Example:
+        result = build_implementation_issue_batching_result(
+            session_summary=session_summary,
+            milestone_planning_result=milestone_planning_result,
+        )
+        if result.status is ImplementationIssueBatchingStatus.READY:
+            assert result.implementation_issue_drafts
+    """
+
+    if session_summary.current_state is not RequirementDiscoverySessionState.MILESTONE_PLANNING:
+        return ImplementationIssueBatchingResult(
+            status=ImplementationIssueBatchingStatus.UNSUPPORTED_STATE,
+            summary_message=(
+                "Implementation issue batching is not supported for workflow state "
+                f"{session_summary.current_state.value}."
+            ),
+            next_state=session_summary.current_state,
+        )
+
+    if (
+        milestone_planning_result is None
+        or milestone_planning_result.status is not MilestonePlanningStatus.READY
+    ):
+        return ImplementationIssueBatchingResult(
+            status=ImplementationIssueBatchingStatus.INPUT_REQUIRED,
+            summary_message=(
+                "A ready milestone planning model is required before implementation issue "
+                "drafting can begin."
+            ),
+            next_state=RequirementDiscoverySessionState.MILESTONE_PLANNING,
+            missing_information_items=("milestone planning model",),
+        )
+
+    milestone_planning_model = milestone_planning_result.milestone_planning_model
+    if milestone_planning_model is None:
+        raise ValueError("milestone_planning_model must be provided when status is READY.")
+
+    implementation_issue_drafts = _build_implementation_issue_drafts(milestone_planning_model)
+    if not implementation_issue_drafts:
+        return ImplementationIssueBatchingResult(
+            status=ImplementationIssueBatchingStatus.INPUT_REQUIRED,
+            summary_message=(
+                "The milestone planning output does not yet contain supported engineer-sized "
+                "implementation issue drafts."
+            ),
+            next_state=RequirementDiscoverySessionState.MILESTONE_PLANNING,
+            missing_information_items=("supported implementation issue drafts",),
+        )
+
+    return ImplementationIssueBatchingResult(
+        status=ImplementationIssueBatchingStatus.READY,
+        summary_message=(
+            f"Prepared {len(implementation_issue_drafts)} implementation issue drafts from "
+            "the milestone plan."
+        ),
+        next_state=RequirementDiscoverySessionState.MILESTONE_PLANNING,
+        implementation_issue_drafts=implementation_issue_drafts,
+    )
+
+
 def _build_requirement_document_update_drafts(
     normalized_prompt_summary: str,
 ) -> tuple[RequirementDocumentUpdateDraft, ...]:
@@ -1741,6 +1986,32 @@ def _build_milestone_implementation_focuses(
             )
         )
     return tuple(implementation_focuses)
+
+
+def _build_implementation_issue_drafts(
+    milestone_planning_model: MilestonePlanningModel,
+) -> tuple[ImplementationIssueDraft, ...]:
+    """Builds engineer-ready implementation issue drafts from milestone focuses."""
+
+    implementation_issue_drafts: list[ImplementationIssueDraft] = []
+    for implementation_focus in milestone_planning_model.implementation_focuses:
+        draft_rule = _IMPLEMENTATION_ISSUE_DRAFT_RULES.get(implementation_focus.use_case_identifier)
+        if draft_rule is None:
+            continue
+        implementation_issue_drafts.append(
+            ImplementationIssueDraft(
+                target_use_case=implementation_focus.use_case_identifier,
+                issue_title=draft_rule.issue_title,
+                issue_summary=(
+                    f"{draft_rule.issue_summary_prefix} "
+                    f"Milestone focus: {implementation_focus.focus_summary} "
+                    f"Prioritization rationale: {implementation_focus.rationale}"
+                ),
+                acceptance_criteria=draft_rule.acceptance_criteria,
+                single_pull_request_scope=draft_rule.single_pull_request_scope,
+            )
+        )
+    return tuple(implementation_issue_drafts)
 
 
 def _validate_manager_requirement_review_findings(
