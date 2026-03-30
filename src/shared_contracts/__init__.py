@@ -12,9 +12,13 @@ from shared_contracts.requirement_discovery_contract import (
     RequirementDocumentUpdateDraftResult,
     RequirementDocumentUpdateDraftStatus,
     RequirementIssueContract,
+    RequirementPullRequestPreparationDraft,
+    RequirementPullRequestPreparationResult,
+    RequirementPullRequestPreparationStatus,
     RequirementRepositoryContract,
     WorkerRoleName,
     build_requirement_document_update_draft_result,
+    build_requirement_pull_request_preparation_result,
 )
 
 __all__ = [
@@ -30,7 +34,11 @@ __all__ = [
     "RequirementDiscoverySessionSummary",
     "RequirementDiscoveryWorkItemContract",
     "RequirementIssueContract",
+    "RequirementPullRequestPreparationDraft",
+    "RequirementPullRequestPreparationResult",
+    "RequirementPullRequestPreparationStatus",
     "RequirementRepositoryContract",
     "WorkerRoleName",
     "build_requirement_document_update_draft_result",
+    "build_requirement_pull_request_preparation_result",
 ]

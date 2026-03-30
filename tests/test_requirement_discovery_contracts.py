@@ -8,7 +8,9 @@ from shared_contracts import (
     RequirementDocumentUpdateDraftResult,
     RequirementDocumentUpdateDraftStatus,
     RequirementIssueContract,
+    RequirementPullRequestPreparationStatus,
     RequirementRepositoryContract,
+    build_requirement_pull_request_preparation_result,
 )
 
 
@@ -218,3 +220,50 @@ def test_requirement_document_update_draft_result_rejects_duplicate_document_typ
         assert str(error) == "update_drafts must not contain duplicate document_type values."
     else:
         raise AssertionError("Expected duplicate document_type validation to fail.")
+
+
+def test_build_requirement_pull_request_preparation_result_returns_ready_draft() -> None:
+    session_summary = RequirementDiscoverySessionSummary(
+        issue_contract=create_requirement_issue_contract(),
+        current_state=RequirementDiscoverySessionState.DISCOVERY_IN_PROGRESS,
+        latest_comment_contract=create_requirement_comment_contract(),
+        latest_prompt_summary=(
+            "Clarify the project goal, security constraints, success criteria, "
+            "user workflow, and architecture boundaries."
+        ),
+    )
+
+    result = build_requirement_pull_request_preparation_result(session_summary)
+
+    assert result.status is RequirementPullRequestPreparationStatus.READY
+    assert result.source_prompt_summary == session_summary.latest_prompt_summary
+    assert result.missing_information_items == ()
+    assert result.preparation_draft is not None
+    assert (
+        str(session_summary.issue_contract.issue_number)
+        in result.preparation_draft.pull_request_title
+    )
+    assert {document_type for document_type in result.preparation_draft.updated_documents} == {
+        RequirementDocumentType.REQUIREMENT,
+        RequirementDocumentType.USE_CASES,
+        RequirementDocumentType.ARCHITECTURE_DIAGRAM,
+    }
+
+
+def test_build_requirement_pull_request_preparation_result_lists_missing_information() -> None:
+    session_summary = RequirementDiscoverySessionSummary(
+        issue_contract=create_requirement_issue_contract(),
+        current_state=RequirementDiscoverySessionState.DISCOVERY_IN_PROGRESS,
+        latest_comment_contract=create_requirement_comment_contract(),
+        latest_prompt_summary="Clarify the user workflow before updating docs.",
+    )
+
+    result = build_requirement_pull_request_preparation_result(session_summary)
+
+    assert result.status is RequirementPullRequestPreparationStatus.INPUT_REQUIRED
+    assert result.preparation_draft is None
+    assert result.missing_information_items == (
+        "project goal",
+        "constraints",
+        "success criteria",
+    )

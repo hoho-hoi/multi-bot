@@ -12,6 +12,7 @@ from shared_contracts import (
     RequirementDocumentType,
     RequirementDocumentUpdateDraftStatus,
     RequirementIssueContract,
+    RequirementPullRequestPreparationStatus,
     RequirementRepositoryContract,
 )
 
@@ -99,6 +100,33 @@ def test_generate_requirement_discovery_architect_response_returns_follow_up_mes
     assert result.document_update_draft_result.status is RequirementDocumentUpdateDraftStatus.READY
     assert {draft.document_type for draft in result.document_update_draft_result.update_drafts} == {
         RequirementDocumentType.REQUIREMENT
+    }
+
+
+def test_generate_requirement_discovery_architect_response_returns_ready_preparation() -> None:
+    session_summary = RequirementDiscoverySessionSummary(
+        issue_contract=create_requirement_issue_contract(),
+        current_state=RequirementDiscoverySessionState.DISCOVERY_IN_PROGRESS,
+        latest_comment_contract=create_requirement_comment_contract(),
+        latest_prompt_summary=(
+            "Clarify the project goal, security constraints, success criteria, "
+            "user workflow, and architecture boundaries."
+        ),
+    )
+
+    result = generate_requirement_discovery_architect_response(session_summary)
+
+    assert result.failure is None
+    assert result.pull_request_preparation_result is not None
+    assert result.pull_request_preparation_result.status is (
+        RequirementPullRequestPreparationStatus.READY
+    )
+    assert result.pull_request_preparation_result.preparation_draft is not None
+    preparation_draft = result.pull_request_preparation_result.preparation_draft
+    assert {document_type for document_type in preparation_draft.updated_documents} == {
+        RequirementDocumentType.REQUIREMENT,
+        RequirementDocumentType.USE_CASES,
+        RequirementDocumentType.ARCHITECTURE_DIAGRAM,
     }
 
 
