@@ -18,6 +18,7 @@ class RequirementDiscoverySessionState(StrEnum):
     IMPLEMENTATION_BACKLOG_READY = "STATE_IMPLEMENTATION_BACKLOG_READY"
     ENGINEER_JOB_RUNNING = "STATE_ENGINEER_JOB_RUNNING"
     IMPLEMENTATION_PR_OPEN = "STATE_IMPLEMENTATION_PR_OPEN"
+    IMPLEMENTATION_REVIEW_IN_PROGRESS = "STATE_IMPLEMENTATION_REVIEW_IN_PROGRESS"
     IMPLEMENTATION_BLOCKED = "STATE_IMPLEMENTATION_BLOCKED"
     USER_DECISION_REQUIRED = "STATE_USER_DECISION_REQUIRED"
 
@@ -129,6 +130,14 @@ class ImplementationPullRequestOpenStatus(StrEnum):
     UNSUPPORTED_STATE = "UNSUPPORTED_STATE"
 
 
+class ManagerImplementationReviewInputStatus(StrEnum):
+    """Enumerates outcomes for manager implementation review input preparation."""
+
+    READY = "READY"
+    INPUT_REQUIRED = "INPUT_REQUIRED"
+    UNSUPPORTED_STATE = "UNSUPPORTED_STATE"
+
+
 class ImplementationBlockerStatus(StrEnum):
     """Enumerates outcomes for preparing an implementation blocker report."""
 
@@ -143,6 +152,22 @@ class UserDecisionEscalationStatus(StrEnum):
     READY = "READY"
     INPUT_REQUIRED = "INPUT_REQUIRED"
     UNSUPPORTED_STATE = "UNSUPPORTED_STATE"
+
+
+class ManagerImplementationReviewOperation(StrEnum):
+    """Enumerates manager operations supported for implementation pull requests."""
+
+    REVIEW_ENGINEER_PR = "OP_REVIEW_ENGINEER_PR"
+
+
+class ManagerImplementationReviewCheckTarget(StrEnum):
+    """Enumerates the minimum targets a manager must verify before review execution."""
+
+    RELATED_ISSUE_TRACEABILITY = "RELATED_ISSUE_TRACEABILITY"
+    ACCEPTANCE_CRITERIA = "ACCEPTANCE_CRITERIA"
+    SINGLE_PULL_REQUEST_SCOPE = "SINGLE_PULL_REQUEST_SCOPE"
+    BASE_BRANCH_POLICY = "BASE_BRANCH_POLICY"
+    TEST_EVIDENCE = "TEST_EVIDENCE"
 
 
 class UseCaseIdentifier(StrEnum):
@@ -1384,18 +1409,28 @@ class ImplementationPullRequestCreatePayload:
 
     Attributes:
         branch_name: Suggested branch name that should be pushed before opening the pull request.
+        base_branch_name: Target branch that the implementation pull request must use.
         pull_request_title: Suggested pull request title for the implementation change.
         pull_request_body_summary: Summary content that should appear in the pull request body.
         test_evidence: Collected local verification evidence for the implementation change.
         related_issue_identifier: Repository-qualified issue reference linked to the pull request.
+        related_issue_title: Title of the implementation issue traced by the pull request.
+        issue_overview: Human-readable overview of the implementation slice under review.
+        acceptance_criteria: Verifiable outcomes preserved from the implementation issue.
+        single_pull_request_scope: Explicit boundary that keeps the implementation within one PR.
         target_state: Workflow state reached once the pull request is opened.
     """
 
     branch_name: str
+    base_branch_name: str
     pull_request_title: str
     pull_request_body_summary: str
     test_evidence: tuple[str, ...]
     related_issue_identifier: str
+    related_issue_title: str
+    issue_overview: str
+    acceptance_criteria: tuple[str, ...]
+    single_pull_request_scope: str
     target_state: RequirementDiscoverySessionState
 
     def __post_init__(self) -> None:
@@ -1403,6 +1438,12 @@ class ImplementationPullRequestCreatePayload:
 
         if not self.branch_name.strip():
             raise ValueError("branch_name must not be empty.")
+        if not self.base_branch_name.strip():
+            raise ValueError("base_branch_name must not be empty.")
+        if self.base_branch_name != _IMPLEMENTATION_PULL_REQUEST_BASE_BRANCH:
+            raise ValueError(
+                f"base_branch_name must be {_IMPLEMENTATION_PULL_REQUEST_BASE_BRANCH}."
+            )
         if not self.pull_request_title.strip():
             raise ValueError("pull_request_title must not be empty.")
         if not self.pull_request_body_summary.strip():
@@ -1415,8 +1456,116 @@ class ImplementationPullRequestCreatePayload:
             raise ValueError("test_evidence must not contain duplicate values.")
         if not self.related_issue_identifier.strip():
             raise ValueError("related_issue_identifier must not be empty.")
+        if not self.related_issue_title.strip():
+            raise ValueError("related_issue_title must not be empty.")
+        if not self.issue_overview.strip():
+            raise ValueError("issue_overview must not be empty.")
+        if not self.acceptance_criteria:
+            raise ValueError("acceptance_criteria must not be empty.")
+        if any(
+            not acceptance_criterion.strip() for acceptance_criterion in self.acceptance_criteria
+        ):
+            raise ValueError("acceptance_criteria must not contain empty values.")
+        if len(set(self.acceptance_criteria)) != len(self.acceptance_criteria):
+            raise ValueError("acceptance_criteria must not contain duplicate values.")
+        if not self.single_pull_request_scope.strip():
+            raise ValueError("single_pull_request_scope must not be empty.")
         if self.target_state is not RequirementDiscoverySessionState.IMPLEMENTATION_PR_OPEN:
             raise ValueError("target_state must be STATE_IMPLEMENTATION_PR_OPEN.")
+
+
+@dataclass(frozen=True, slots=True)
+class OpenedImplementationPullRequestMetadata:
+    """Represents the opened implementation pull request metadata consumed by Manager.
+
+    Attributes:
+        pull_request_number: Repository-local pull request number visible on GitHub.
+        branch_name: Source branch that carries the implementation change.
+        base_branch_name: Target branch that received the implementation pull request.
+        pull_request_title: Opened pull request title under review.
+        pull_request_body_summary: Human-readable summary of the implementation pull request.
+        test_evidence: Collected local verification evidence attached to the pull request.
+        related_issue_identifier: Repository-qualified implementation issue reference.
+        related_issue_title: Title of the related implementation issue.
+        issue_overview: Overview of the implementation slice under review.
+        acceptance_criteria: Verifiable outcomes that Manager must check.
+        single_pull_request_scope: Explicit boundary that defines the intended single-PR slice.
+    """
+
+    pull_request_number: int
+    branch_name: str
+    base_branch_name: str
+    pull_request_title: str
+    pull_request_body_summary: str
+    test_evidence: tuple[str, ...]
+    related_issue_identifier: str
+    related_issue_title: str
+    issue_overview: str
+    acceptance_criteria: tuple[str, ...]
+    single_pull_request_scope: str
+
+    def __post_init__(self) -> None:
+        """Validates opened implementation pull request metadata."""
+
+        if self.pull_request_number <= 0:
+            raise ValueError("pull_request_number must be greater than zero.")
+        if not self.branch_name.strip():
+            raise ValueError("branch_name must not be empty.")
+        if not self.base_branch_name.strip():
+            raise ValueError("base_branch_name must not be empty.")
+        if self.base_branch_name != _IMPLEMENTATION_PULL_REQUEST_BASE_BRANCH:
+            raise ValueError(
+                f"base_branch_name must be {_IMPLEMENTATION_PULL_REQUEST_BASE_BRANCH}."
+            )
+        if not self.pull_request_title.strip():
+            raise ValueError("pull_request_title must not be empty.")
+        if not self.pull_request_body_summary.strip():
+            raise ValueError("pull_request_body_summary must not be empty.")
+        if not self.test_evidence:
+            raise ValueError("test_evidence must not be empty.")
+        if any(not evidence_item.strip() for evidence_item in self.test_evidence):
+            raise ValueError("test_evidence must not contain empty values.")
+        if len(set(self.test_evidence)) != len(self.test_evidence):
+            raise ValueError("test_evidence must not contain duplicate values.")
+        if not self.related_issue_identifier.strip():
+            raise ValueError("related_issue_identifier must not be empty.")
+        if not self.related_issue_title.strip():
+            raise ValueError("related_issue_title must not be empty.")
+        if not self.issue_overview.strip():
+            raise ValueError("issue_overview must not be empty.")
+        if not self.acceptance_criteria:
+            raise ValueError("acceptance_criteria must not be empty.")
+        if any(
+            not acceptance_criterion.strip() for acceptance_criterion in self.acceptance_criteria
+        ):
+            raise ValueError("acceptance_criteria must not contain empty values.")
+        if len(set(self.acceptance_criteria)) != len(self.acceptance_criteria):
+            raise ValueError("acceptance_criteria must not contain duplicate values.")
+        if not self.single_pull_request_scope.strip():
+            raise ValueError("single_pull_request_scope must not be empty.")
+
+    @classmethod
+    def from_pull_request_create_payload(
+        cls,
+        *,
+        pull_request_create_payload: ImplementationPullRequestCreatePayload,
+        pull_request_number: int,
+    ) -> "OpenedImplementationPullRequestMetadata":
+        """Builds opened pull request metadata from a create payload plus PR number."""
+
+        return cls(
+            pull_request_number=pull_request_number,
+            branch_name=pull_request_create_payload.branch_name,
+            base_branch_name=pull_request_create_payload.base_branch_name,
+            pull_request_title=pull_request_create_payload.pull_request_title,
+            pull_request_body_summary=pull_request_create_payload.pull_request_body_summary,
+            test_evidence=pull_request_create_payload.test_evidence,
+            related_issue_identifier=pull_request_create_payload.related_issue_identifier,
+            related_issue_title=pull_request_create_payload.related_issue_title,
+            issue_overview=pull_request_create_payload.issue_overview,
+            acceptance_criteria=pull_request_create_payload.acceptance_criteria,
+            single_pull_request_scope=pull_request_create_payload.single_pull_request_scope,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -1503,6 +1652,149 @@ class ImplementationPullRequestOpenResult:
             )
         if self.blocker_summary is not None:
             raise ValueError("blocker_summary must be empty when status is UNSUPPORTED_STATE.")
+
+
+@dataclass(frozen=True, slots=True)
+class ManagerImplementationReviewTransitionContext:
+    """Represents the workflow transition metadata required for implementation review."""
+
+    current_state: RequirementDiscoverySessionState
+    next_state: RequirementDiscoverySessionState
+    required_operation: ManagerImplementationReviewOperation
+
+    def __post_init__(self) -> None:
+        """Validates manager implementation review transition metadata."""
+
+        if self.current_state is not RequirementDiscoverySessionState.IMPLEMENTATION_PR_OPEN:
+            raise ValueError("current_state must be STATE_IMPLEMENTATION_PR_OPEN.")
+        if (
+            self.next_state
+            is not RequirementDiscoverySessionState.IMPLEMENTATION_REVIEW_IN_PROGRESS
+        ):
+            raise ValueError("next_state must be STATE_IMPLEMENTATION_REVIEW_IN_PROGRESS.")
+        if self.required_operation is not ManagerImplementationReviewOperation.REVIEW_ENGINEER_PR:
+            raise ValueError("required_operation must be OP_REVIEW_ENGINEER_PR.")
+
+
+@dataclass(frozen=True, slots=True)
+class ManagerImplementationReviewInput:
+    """Represents the strict manager input required for implementation PR review.
+
+    Attributes:
+        pull_request_number: Opened pull request number when GitHub metadata is available.
+        branch_name: Source branch that carries the implementation change.
+        base_branch_name: Target branch that the implementation pull request must use.
+        pull_request_title: Opened implementation pull request title under review.
+        pull_request_summary: Human-readable summary of the implementation pull request.
+        related_issue_identifier: Repository-qualified implementation issue reference.
+        related_issue_title: Title of the related implementation issue.
+        issue_overview: Overview of the implementation slice under review.
+        acceptance_criteria: Verifiable outcomes that Manager must review.
+        single_pull_request_scope: Explicit boundary that should remain within one pull request.
+        test_evidence: Local verification evidence attached to the implementation change.
+        review_targets: Minimum targets that Manager must verify during review.
+        transition_context: Workflow transition metadata for `OP_REVIEW_ENGINEER_PR`.
+    """
+
+    pull_request_number: int | None
+    branch_name: str
+    base_branch_name: str
+    pull_request_title: str
+    pull_request_summary: str
+    related_issue_identifier: str
+    related_issue_title: str
+    issue_overview: str
+    acceptance_criteria: tuple[str, ...]
+    single_pull_request_scope: str
+    test_evidence: tuple[str, ...]
+    review_targets: tuple[ManagerImplementationReviewCheckTarget, ...]
+    transition_context: ManagerImplementationReviewTransitionContext
+
+    def __post_init__(self) -> None:
+        """Validates manager implementation review input fields."""
+
+        if self.pull_request_number is not None and self.pull_request_number <= 0:
+            raise ValueError("pull_request_number must be greater than zero when provided.")
+        if not self.branch_name.strip():
+            raise ValueError("branch_name must not be empty.")
+        if not self.base_branch_name.strip():
+            raise ValueError("base_branch_name must not be empty.")
+        if self.base_branch_name != _IMPLEMENTATION_PULL_REQUEST_BASE_BRANCH:
+            raise ValueError(
+                f"base_branch_name must be {_IMPLEMENTATION_PULL_REQUEST_BASE_BRANCH}."
+            )
+        if not self.pull_request_title.strip():
+            raise ValueError("pull_request_title must not be empty.")
+        if not self.pull_request_summary.strip():
+            raise ValueError("pull_request_summary must not be empty.")
+        if not self.related_issue_identifier.strip():
+            raise ValueError("related_issue_identifier must not be empty.")
+        if not self.related_issue_title.strip():
+            raise ValueError("related_issue_title must not be empty.")
+        if not self.issue_overview.strip():
+            raise ValueError("issue_overview must not be empty.")
+        if not self.acceptance_criteria:
+            raise ValueError("acceptance_criteria must not be empty.")
+        if any(
+            not acceptance_criterion.strip() for acceptance_criterion in self.acceptance_criteria
+        ):
+            raise ValueError("acceptance_criteria must not contain empty values.")
+        if len(set(self.acceptance_criteria)) != len(self.acceptance_criteria):
+            raise ValueError("acceptance_criteria must not contain duplicate values.")
+        if not self.single_pull_request_scope.strip():
+            raise ValueError("single_pull_request_scope must not be empty.")
+        if not self.test_evidence:
+            raise ValueError("test_evidence must not be empty.")
+        if any(not evidence_item.strip() for evidence_item in self.test_evidence):
+            raise ValueError("test_evidence must not contain empty values.")
+        if len(set(self.test_evidence)) != len(self.test_evidence):
+            raise ValueError("test_evidence must not contain duplicate values.")
+        if not self.review_targets:
+            raise ValueError("review_targets must not be empty.")
+        if len(set(self.review_targets)) != len(self.review_targets):
+            raise ValueError("review_targets must not contain duplicate values.")
+
+
+@dataclass(frozen=True, slots=True)
+class ManagerImplementationReviewInputResult:
+    """Represents whether manager implementation review can start immediately."""
+
+    status: ManagerImplementationReviewInputStatus
+    summary_message: str
+    missing_information_items: tuple[str, ...] = ()
+    review_input: ManagerImplementationReviewInput | None = None
+
+    def __post_init__(self) -> None:
+        """Validates result consistency."""
+
+        if not self.summary_message.strip():
+            raise ValueError("summary_message must not be empty.")
+        if any(not missing_item.strip() for missing_item in self.missing_information_items):
+            raise ValueError("missing_information_items must not contain empty values.")
+        if len(set(self.missing_information_items)) != len(self.missing_information_items):
+            raise ValueError("missing_information_items must not contain duplicate values.")
+
+        if self.status is ManagerImplementationReviewInputStatus.READY:
+            if self.review_input is None:
+                raise ValueError("review_input must be provided when status is READY.")
+            if self.missing_information_items:
+                raise ValueError("missing_information_items must be empty when status is READY.")
+            return
+
+        if self.review_input is not None:
+            raise ValueError("review_input must be empty unless status is READY.")
+
+        if self.status is ManagerImplementationReviewInputStatus.INPUT_REQUIRED:
+            if not self.missing_information_items:
+                raise ValueError(
+                    "missing_information_items must not be empty when status is INPUT_REQUIRED."
+                )
+            return
+
+        if self.missing_information_items:
+            raise ValueError(
+                "missing_information_items must be empty when status is UNSUPPORTED_STATE."
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -1796,6 +2088,17 @@ _MANAGER_REQUIREMENT_REVIEW_FOCUS_AREAS = (
     ManagerRequirementReviewFocusArea.ARCHITECTURE_ALIGNMENT,
     ManagerRequirementReviewFocusArea.OPEN_DECISION_HANDLING,
     ManagerRequirementReviewFocusArea.DOCUMENT_CROSS_CHECK,
+)
+
+_IMPLEMENTATION_PULL_REQUEST_BASE_BRANCH = "main"
+
+
+_MANAGER_IMPLEMENTATION_REVIEW_CHECK_TARGETS = (
+    ManagerImplementationReviewCheckTarget.RELATED_ISSUE_TRACEABILITY,
+    ManagerImplementationReviewCheckTarget.ACCEPTANCE_CRITERIA,
+    ManagerImplementationReviewCheckTarget.SINGLE_PULL_REQUEST_SCOPE,
+    ManagerImplementationReviewCheckTarget.BASE_BRANCH_POLICY,
+    ManagerImplementationReviewCheckTarget.TEST_EVIDENCE,
 )
 
 _REQUIREMENT_DOCUMENT_UPDATE_RULES = (
@@ -2770,6 +3073,7 @@ def build_implementation_pull_request_open_result(
                 issue_number=issue_work_item_contract.issue_number,
                 issue_title=issue_work_item_contract.issue_title,
             ),
+            base_branch_name=_IMPLEMENTATION_PULL_REQUEST_BASE_BRANCH,
             pull_request_title=(
                 f"Implement issue #{issue_work_item_contract.issue_number}: "
                 f"{issue_work_item_contract.issue_title}"
@@ -2780,7 +3084,102 @@ def build_implementation_pull_request_open_result(
             ),
             test_evidence=normalized_test_evidence,
             related_issue_identifier=related_issue_identifier,
+            related_issue_title=issue_work_item_contract.issue_title,
+            issue_overview=engineer_job_input.issue_overview,
+            acceptance_criteria=engineer_job_input.acceptance_criteria,
+            single_pull_request_scope=engineer_job_input.single_pull_request_scope,
             target_state=RequirementDiscoverySessionState.IMPLEMENTATION_PR_OPEN,
+        ),
+    )
+
+
+def build_manager_implementation_review_input_result(
+    session_summary: RequirementDiscoverySessionSummary,
+    pull_request_create_payload: ImplementationPullRequestCreatePayload | None,
+    opened_pull_request_metadata: OpenedImplementationPullRequestMetadata | None,
+) -> ManagerImplementationReviewInputResult:
+    """Builds the strict manager input required to review an implementation PR.
+
+    Args:
+        session_summary: Current requirement discovery session snapshot.
+        pull_request_create_payload: Implementation PR payload prepared before the PR opened.
+        opened_pull_request_metadata: Opened PR metadata captured after GitHub created the PR.
+
+    Returns:
+        A typed result describing whether manager implementation review can start immediately.
+    """
+
+    if session_summary.current_state is not RequirementDiscoverySessionState.IMPLEMENTATION_PR_OPEN:
+        return ManagerImplementationReviewInputResult(
+            status=ManagerImplementationReviewInputStatus.UNSUPPORTED_STATE,
+            summary_message=(
+                "Manager implementation review input is not supported for workflow state "
+                f"{session_summary.current_state.value}."
+            ),
+        )
+
+    if pull_request_create_payload is None and opened_pull_request_metadata is None:
+        return ManagerImplementationReviewInputResult(
+            status=ManagerImplementationReviewInputStatus.INPUT_REQUIRED,
+            summary_message=(
+                "Opened implementation pull request metadata is required before manager "
+                "review can start."
+            ),
+            missing_information_items=(
+                "implementation pull request payload or opened pull request metadata",
+            ),
+        )
+
+    if opened_pull_request_metadata is not None:
+        pull_request_number: int | None = opened_pull_request_metadata.pull_request_number
+        branch_name = opened_pull_request_metadata.branch_name
+        base_branch_name = opened_pull_request_metadata.base_branch_name
+        pull_request_title = opened_pull_request_metadata.pull_request_title
+        pull_request_summary = opened_pull_request_metadata.pull_request_body_summary
+        test_evidence = opened_pull_request_metadata.test_evidence
+        related_issue_identifier = opened_pull_request_metadata.related_issue_identifier
+        related_issue_title = opened_pull_request_metadata.related_issue_title
+        issue_overview = opened_pull_request_metadata.issue_overview
+        acceptance_criteria = opened_pull_request_metadata.acceptance_criteria
+        single_pull_request_scope = opened_pull_request_metadata.single_pull_request_scope
+    else:
+        if pull_request_create_payload is None:
+            raise ValueError("Implementation review source must be available after validation.")
+        pull_request_number = None
+        branch_name = pull_request_create_payload.branch_name
+        base_branch_name = pull_request_create_payload.base_branch_name
+        pull_request_title = pull_request_create_payload.pull_request_title
+        pull_request_summary = pull_request_create_payload.pull_request_body_summary
+        test_evidence = pull_request_create_payload.test_evidence
+        related_issue_identifier = pull_request_create_payload.related_issue_identifier
+        related_issue_title = pull_request_create_payload.related_issue_title
+        issue_overview = pull_request_create_payload.issue_overview
+        acceptance_criteria = pull_request_create_payload.acceptance_criteria
+        single_pull_request_scope = pull_request_create_payload.single_pull_request_scope
+
+    return ManagerImplementationReviewInputResult(
+        status=ManagerImplementationReviewInputStatus.READY,
+        summary_message=(
+            "Prepared the manager implementation review input for the opened pull request."
+        ),
+        review_input=ManagerImplementationReviewInput(
+            pull_request_number=pull_request_number,
+            branch_name=branch_name,
+            base_branch_name=base_branch_name,
+            pull_request_title=pull_request_title,
+            pull_request_summary=pull_request_summary,
+            related_issue_identifier=related_issue_identifier,
+            related_issue_title=related_issue_title,
+            issue_overview=issue_overview,
+            acceptance_criteria=acceptance_criteria,
+            single_pull_request_scope=single_pull_request_scope,
+            test_evidence=test_evidence,
+            review_targets=_MANAGER_IMPLEMENTATION_REVIEW_CHECK_TARGETS,
+            transition_context=ManagerImplementationReviewTransitionContext(
+                current_state=RequirementDiscoverySessionState.IMPLEMENTATION_PR_OPEN,
+                next_state=RequirementDiscoverySessionState.IMPLEMENTATION_REVIEW_IN_PROGRESS,
+                required_operation=ManagerImplementationReviewOperation.REVIEW_ENGINEER_PR,
+            ),
         ),
     )
 

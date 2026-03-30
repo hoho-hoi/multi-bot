@@ -51,3 +51,5 @@ assignees: ''
 - [ ] `make test` がローカルで成功する
 - [ ] `make lint` がローカルで成功する
 - [ ] （定義されている場合）`make format` 実行後も `make lint` / `make test` が成功している
+- [ ] 実装 PR の base branch は `main` であり、stacked PR を前提にしていない
+- [ ] 関連 Issue は `main` 反映確認（commit / branch / file diff のいずれか）が完了するまで close しない

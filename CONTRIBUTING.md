@@ -14,6 +14,21 @@ This project follows a strict **"Self-Validating AI Development Ecosystem"**.
 - **Do not** bypass CI. If CI fails, the PR is invalid.
 - **Follow the Signs:** Look for `::: action` blocks in AI responses.
 
+## Branching & Closure Rules
+
+- Start every delivery branch from `origin/main`.
+- Open every implementation or recovery PR against `main`.
+- Do not use stacked PRs for normal delivery work.
+- Keep the linked Issue open until the implementation is visible on `main`.
+
+## Verification Example
+
+Use one of these checks before closing the linked Issue:
+
+- `git merge-base --is-ancestor <commit-on-main-path> origin/main`
+- `git diff --stat origin/main...<recovery-branch>`
+- Review the merged PR diff against `main`
+
 ## For AI Agents
 
 - **Read Rules First:** Always reference `.cursor/rules/*.mdc`.
