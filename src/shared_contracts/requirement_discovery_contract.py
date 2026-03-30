@@ -12,6 +12,21 @@ class RequirementDiscoverySessionState(StrEnum):
     PR_OPEN = "STATE_REQUIREMENT_PR_OPEN"
 
 
+class WorkerRoleName(StrEnum):
+    """Enumerates worker roles that can consume shared work items."""
+
+    ARCHITECT = "architect"
+    MANAGER = "manager"
+    ENGINEER = "engineer"
+
+
+class ProviderName(StrEnum):
+    """Enumerates provider adapters available to worker-runtime."""
+
+    CURSOR = "cursor"
+    OPENAI = "openai"
+
+
 @dataclass(frozen=True, slots=True)
 class RequirementRepositoryContract:
     """Represents repository metadata required for requirement discovery.
@@ -143,10 +158,14 @@ class RequirementDiscoveryWorkItemContract:
     Attributes:
         issue_work_item_contract: Minimal issue payload understood by worker-runtime.
         session_summary: Requirement discovery session snapshot to execute from.
+        role_name: Worker role selected by the control-plane.
+        provider_name: Provider adapter selected by the control-plane.
     """
 
     issue_work_item_contract: IssueWorkItemContract
     session_summary: RequirementDiscoverySessionSummary
+    role_name: WorkerRoleName = WorkerRoleName.ARCHITECT
+    provider_name: ProviderName = ProviderName.CURSOR
 
     def __post_init__(self) -> None:
         """Validates that the work item and session refer to the same issue."""
@@ -157,3 +176,7 @@ class RequirementDiscoveryWorkItemContract:
             raise ValueError(
                 "issue_work_item_contract must reference the same issue as session_summary."
             )
+        if not isinstance(self.role_name, WorkerRoleName):
+            raise ValueError("role_name must be a WorkerRoleName value.")
+        if not isinstance(self.provider_name, ProviderName):
+            raise ValueError("provider_name must be a ProviderName value.")
