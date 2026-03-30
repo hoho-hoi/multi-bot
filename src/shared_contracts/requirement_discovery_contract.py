@@ -138,6 +138,14 @@ class ManagerImplementationReviewInputStatus(StrEnum):
     UNSUPPORTED_STATE = "UNSUPPORTED_STATE"
 
 
+class ManagerImplementationReviewDecisionStatus(StrEnum):
+    """Enumerates outcomes for manager implementation review decision building."""
+
+    READY = "READY"
+    INPUT_REQUIRED = "INPUT_REQUIRED"
+    UNSUPPORTED_REVIEW_SCOPE = "UNSUPPORTED_REVIEW_SCOPE"
+
+
 class ImplementationBlockerStatus(StrEnum):
     """Enumerates outcomes for preparing an implementation blocker report."""
 
@@ -168,6 +176,15 @@ class ManagerImplementationReviewCheckTarget(StrEnum):
     SINGLE_PULL_REQUEST_SCOPE = "SINGLE_PULL_REQUEST_SCOPE"
     BASE_BRANCH_POLICY = "BASE_BRANCH_POLICY"
     TEST_EVIDENCE = "TEST_EVIDENCE"
+    DOCUMENTATION_ALIGNMENT = "DOCUMENTATION_ALIGNMENT"
+
+
+class ManagerImplementationReviewDecision(StrEnum):
+    """Enumerates the implementation review decisions supported for engineer PRs."""
+
+    APPROVE = "APPROVE"
+    REQUEST_CHANGES = "REQUEST_CHANGES"
+    USER_DECISION_REQUIRED = "USER_DECISION_REQUIRED"
 
 
 class UseCaseIdentifier(StrEnum):
@@ -1798,6 +1815,183 @@ class ManagerImplementationReviewInputResult:
 
 
 @dataclass(frozen=True, slots=True)
+class ManagerImplementationReviewDecisionFinding:
+    """Represents one typed finding from the manager implementation review.
+
+    Attributes:
+        check_target: Review target where the implementation gap was observed.
+        summary: Human-readable explanation of the review finding.
+    """
+
+    check_target: ManagerImplementationReviewCheckTarget
+    summary: str
+
+    def __post_init__(self) -> None:
+        """Validates implementation review finding fields."""
+
+        if not self.summary.strip():
+            raise ValueError("summary must not be empty.")
+
+
+@dataclass(frozen=True, slots=True)
+class ManagerImplementationReviewDecisionResult:
+    """Represents the typed implementation review outcome and follow-up rationale.
+
+    Attributes:
+        status: High-level outcome for caller-side branching.
+        summary_message: Human-readable summary of the decision-building outcome.
+        decision: Typed decision when status is `READY`.
+        review_body_draft: Draft PR review body for approve or request-changes outcomes.
+        findings: Typed implementation review findings that explain the outcome.
+        requested_changes: Human-readable changes derived from the findings.
+        missing_information_items: Required inputs that are still missing.
+        unsupported_check_targets: Review targets that are outside the declared review scope.
+        retry_limit_reason: Why another automated review retry should not be attempted.
+        escalation_reason: Why user direction is required to continue safely.
+
+    Example:
+        result = build_manager_implementation_review_decision_result(
+            review_input=review_input,
+            review_findings=(),
+            retry_limit_reason=None,
+            escalation_reason=None,
+        )
+        assert result.decision is ManagerImplementationReviewDecision.APPROVE
+    """
+
+    status: ManagerImplementationReviewDecisionStatus
+    summary_message: str
+    decision: ManagerImplementationReviewDecision | None = None
+    review_body_draft: str | None = None
+    findings: tuple[ManagerImplementationReviewDecisionFinding, ...] = ()
+    requested_changes: tuple[str, ...] = ()
+    missing_information_items: tuple[str, ...] = ()
+    unsupported_check_targets: tuple[ManagerImplementationReviewCheckTarget, ...] = ()
+    retry_limit_reason: str | None = None
+    escalation_reason: str | None = None
+
+    def __post_init__(self) -> None:
+        """Validates implementation-review decision result consistency."""
+
+        if not self.summary_message.strip():
+            raise ValueError("summary_message must not be empty.")
+        if self.review_body_draft is not None and not self.review_body_draft.strip():
+            raise ValueError("review_body_draft must not be empty when provided.")
+        if any(not change_item.strip() for change_item in self.requested_changes):
+            raise ValueError("requested_changes must not contain empty values.")
+        if any(not missing_item.strip() for missing_item in self.missing_information_items):
+            raise ValueError("missing_information_items must not contain empty values.")
+        if len(set(self.findings)) != len(self.findings):
+            raise ValueError("findings must not contain duplicate values.")
+        if len(set(self.requested_changes)) != len(self.requested_changes):
+            raise ValueError("requested_changes must not contain duplicate values.")
+        if len(set(self.missing_information_items)) != len(self.missing_information_items):
+            raise ValueError("missing_information_items must not contain duplicate values.")
+        if len(set(self.unsupported_check_targets)) != len(self.unsupported_check_targets):
+            raise ValueError("unsupported_check_targets must not contain duplicate values.")
+        if self.retry_limit_reason is not None and not self.retry_limit_reason.strip():
+            raise ValueError("retry_limit_reason must not be empty when provided.")
+        if self.escalation_reason is not None and not self.escalation_reason.strip():
+            raise ValueError("escalation_reason must not be empty when provided.")
+
+        if self.status is ManagerImplementationReviewDecisionStatus.READY:
+            if self.decision is None:
+                raise ValueError("decision must be provided when status is READY.")
+            if self.missing_information_items:
+                raise ValueError("missing_information_items must be empty when status is READY.")
+            if self.unsupported_check_targets:
+                raise ValueError("unsupported_check_targets must be empty when status is READY.")
+            if self.decision is ManagerImplementationReviewDecision.APPROVE:
+                if self.review_body_draft is None:
+                    raise ValueError("review_body_draft must be provided when decision is APPROVE.")
+                if self.findings:
+                    raise ValueError("findings must be empty when decision is APPROVE.")
+                if self.requested_changes:
+                    raise ValueError("requested_changes must be empty when decision is APPROVE.")
+                if self.retry_limit_reason is not None:
+                    raise ValueError("retry_limit_reason must be empty when decision is APPROVE.")
+                if self.escalation_reason is not None:
+                    raise ValueError("escalation_reason must be empty when decision is APPROVE.")
+                return
+
+            if self.decision is ManagerImplementationReviewDecision.REQUEST_CHANGES:
+                if self.review_body_draft is None:
+                    raise ValueError(
+                        "review_body_draft must be provided when decision is REQUEST_CHANGES."
+                    )
+                if not self.findings:
+                    raise ValueError("findings must not be empty when decision is REQUEST_CHANGES.")
+                if not self.requested_changes:
+                    raise ValueError(
+                        "requested_changes must not be empty when decision is REQUEST_CHANGES."
+                    )
+                if self.retry_limit_reason is not None:
+                    raise ValueError(
+                        "retry_limit_reason must be empty when decision is REQUEST_CHANGES."
+                    )
+                if self.escalation_reason is not None:
+                    raise ValueError(
+                        "escalation_reason must be empty when decision is REQUEST_CHANGES."
+                    )
+                return
+
+            if self.review_body_draft is not None:
+                raise ValueError(
+                    "review_body_draft must be empty when decision is USER_DECISION_REQUIRED."
+                )
+            if not self.retry_limit_reason and not self.escalation_reason:
+                raise ValueError(
+                    "retry_limit_reason or escalation_reason must be provided when decision "
+                    "is USER_DECISION_REQUIRED."
+                )
+            if self.findings and not self.requested_changes:
+                raise ValueError(
+                    "requested_changes must be provided when findings are included for "
+                    "USER_DECISION_REQUIRED."
+                )
+            if self.requested_changes and not self.findings:
+                raise ValueError(
+                    "findings must be provided when requested_changes are included for "
+                    "USER_DECISION_REQUIRED."
+                )
+            return
+
+        if self.decision is not None:
+            raise ValueError("decision must be empty unless status is READY.")
+        if self.review_body_draft is not None:
+            raise ValueError("review_body_draft must be empty unless status is READY.")
+        if self.findings:
+            raise ValueError("findings must be empty unless status is READY.")
+        if self.requested_changes:
+            raise ValueError("requested_changes must be empty unless status is READY.")
+        if self.retry_limit_reason is not None:
+            raise ValueError("retry_limit_reason must be empty unless status is READY.")
+        if self.escalation_reason is not None:
+            raise ValueError("escalation_reason must be empty unless status is READY.")
+
+        if self.status is ManagerImplementationReviewDecisionStatus.INPUT_REQUIRED:
+            if not self.missing_information_items:
+                raise ValueError(
+                    "missing_information_items must not be empty when status is INPUT_REQUIRED."
+                )
+            if self.unsupported_check_targets:
+                raise ValueError(
+                    "unsupported_check_targets must be empty when status is INPUT_REQUIRED."
+                )
+            return
+
+        if self.missing_information_items:
+            raise ValueError(
+                "missing_information_items must be empty when status is UNSUPPORTED_REVIEW_SCOPE."
+            )
+        if not self.unsupported_check_targets:
+            raise ValueError(
+                "unsupported_check_targets must not be empty when status is "
+                "UNSUPPORTED_REVIEW_SCOPE."
+            )
+
+
+@dataclass(frozen=True, slots=True)
 class ImplementationBlockerDraft:
     """Represents a typed implementation blocker draft for issue comment creation.
 
@@ -2099,6 +2293,7 @@ _MANAGER_IMPLEMENTATION_REVIEW_CHECK_TARGETS = (
     ManagerImplementationReviewCheckTarget.SINGLE_PULL_REQUEST_SCOPE,
     ManagerImplementationReviewCheckTarget.BASE_BRANCH_POLICY,
     ManagerImplementationReviewCheckTarget.TEST_EVIDENCE,
+    ManagerImplementationReviewCheckTarget.DOCUMENTATION_ALIGNMENT,
 )
 
 _REQUIREMENT_DOCUMENT_UPDATE_RULES = (
@@ -3184,6 +3379,103 @@ def build_manager_implementation_review_input_result(
     )
 
 
+def build_manager_implementation_review_decision_result(
+    review_input: ManagerImplementationReviewInput | None,
+    review_findings: tuple[ManagerImplementationReviewDecisionFinding, ...],
+    retry_limit_reason: str | None,
+    escalation_reason: str | None,
+) -> ManagerImplementationReviewDecisionResult:
+    """Builds the strict manager decision result for an implementation review.
+
+    Args:
+        review_input: Strict manager review input for the opened implementation pull request.
+        review_findings: Typed findings collected during the implementation review.
+        retry_limit_reason: Rationale for stopping automated review retries when applicable.
+        escalation_reason: Rationale for escalating to the user when applicable.
+
+    Returns:
+        A typed decision result that can later feed review execution or user escalation.
+
+    Example:
+        result = build_manager_implementation_review_decision_result(
+            review_input=review_input,
+            review_findings=(),
+            retry_limit_reason=None,
+            escalation_reason=None,
+        )
+        assert result.decision is ManagerImplementationReviewDecision.APPROVE
+    """
+
+    if review_input is None:
+        return ManagerImplementationReviewDecisionResult(
+            status=ManagerImplementationReviewDecisionStatus.INPUT_REQUIRED,
+            summary_message=(
+                "Manager implementation review input is required before the review decision "
+                "can be determined."
+            ),
+            missing_information_items=("manager implementation review input",),
+        )
+
+    unsupported_check_targets = _collect_unsupported_implementation_review_check_targets(
+        review_input=review_input,
+        review_findings=review_findings,
+    )
+    if unsupported_check_targets:
+        return ManagerImplementationReviewDecisionResult(
+            status=ManagerImplementationReviewDecisionStatus.UNSUPPORTED_REVIEW_SCOPE,
+            summary_message=(
+                "The provided implementation review findings include check targets outside "
+                "the declared review scope."
+            ),
+            unsupported_check_targets=unsupported_check_targets,
+        )
+
+    normalized_retry_limit_reason = _normalize_optional_reason(retry_limit_reason)
+    normalized_escalation_reason = _normalize_optional_reason(escalation_reason)
+    requested_changes = tuple(
+        _format_manager_implementation_requested_change(review_finding)
+        for review_finding in review_findings
+    )
+
+    if normalized_retry_limit_reason is not None or normalized_escalation_reason is not None:
+        return ManagerImplementationReviewDecisionResult(
+            status=ManagerImplementationReviewDecisionStatus.READY,
+            summary_message=(
+                "Implementation review requires user direction before Manager can finalize "
+                "the outcome."
+            ),
+            decision=ManagerImplementationReviewDecision.USER_DECISION_REQUIRED,
+            findings=review_findings,
+            requested_changes=requested_changes,
+            retry_limit_reason=normalized_retry_limit_reason,
+            escalation_reason=normalized_escalation_reason,
+        )
+
+    if not review_findings:
+        return ManagerImplementationReviewDecisionResult(
+            status=ManagerImplementationReviewDecisionStatus.READY,
+            summary_message=(
+                "Implementation review passed the minimum manager checks for approval."
+            ),
+            decision=ManagerImplementationReviewDecision.APPROVE,
+            review_body_draft=_build_manager_implementation_review_approve_body_draft(review_input),
+        )
+
+    return ManagerImplementationReviewDecisionResult(
+        status=ManagerImplementationReviewDecisionStatus.READY,
+        summary_message=(
+            "Implementation review found changes that Engineer must address before approval."
+        ),
+        decision=ManagerImplementationReviewDecision.REQUEST_CHANGES,
+        review_body_draft=_build_manager_implementation_review_requested_changes_body_draft(
+            review_input=review_input,
+            requested_changes=requested_changes,
+        ),
+        findings=review_findings,
+        requested_changes=requested_changes,
+    )
+
+
 def build_implementation_blocker_result(
     session_summary: RequirementDiscoverySessionSummary,
     engineer_job_input: EngineerJobInput | None,
@@ -3451,10 +3743,61 @@ def _build_user_decision_escalation_comment_body_draft(
     )
 
 
+def _build_manager_implementation_review_approve_body_draft(
+    review_input: ManagerImplementationReviewInput,
+) -> str:
+    """Builds the draft review body for an approved implementation review."""
+
+    reviewed_check_targets = ", ".join(
+        check_target.value for check_target in review_input.review_targets
+    )
+    return (
+        f"Approve implementation review for `{review_input.pull_request_title}`.\n\n"
+        "The minimum implementation review checks passed for this review round.\n"
+        f"Reviewed check targets: {reviewed_check_targets}."
+    )
+
+
+def _build_manager_implementation_review_requested_changes_body_draft(
+    review_input: ManagerImplementationReviewInput,
+    requested_changes: tuple[str, ...],
+) -> str:
+    """Builds the draft review body for a request-changes implementation outcome."""
+
+    requested_change_lines = "\n".join(
+        f"- {requested_change}" for requested_change in requested_changes
+    )
+    return (
+        f"Request changes for `{review_input.pull_request_title}`.\n\n"
+        "Please resolve the following implementation review issues before approval:\n"
+        f"{requested_change_lines}"
+    )
+
+
+def _format_manager_implementation_requested_change(
+    review_finding: ManagerImplementationReviewDecisionFinding,
+) -> str:
+    """Formats one implementation review finding into a requested-change item."""
+
+    return f"Address {review_finding.check_target.value}: {review_finding.summary}"
+
+
 def _format_bullet_lines(lines: tuple[str, ...]) -> str:
     """Formats string values as Markdown bullet lines."""
 
     return "\n".join(f"- {line}" for line in lines)
+
+
+def _normalize_optional_reason(reason: str | None) -> str | None:
+    """Normalizes optional user-decision rationale text."""
+
+    if reason is None:
+        return None
+
+    normalized_reason = reason.strip()
+    if not normalized_reason:
+        return None
+    return normalized_reason
 
 
 def _normalize_test_evidence(test_evidence: tuple[str, ...] | None) -> tuple[str, ...] | None:
@@ -3526,6 +3869,23 @@ def _build_manager_requirement_review_next_state(
     if review_decision is ManagerRequirementReviewDecision.APPROVE:
         return RequirementDiscoverySessionState.REQUIREMENT_APPROVED
     return RequirementDiscoverySessionState.REQUIREMENT_CHANGES_REQUESTED
+
+
+def _collect_unsupported_implementation_review_check_targets(
+    review_input: ManagerImplementationReviewInput,
+    review_findings: tuple[ManagerImplementationReviewDecisionFinding, ...],
+) -> tuple[ManagerImplementationReviewCheckTarget, ...]:
+    """Collects implementation review targets that are outside the declared scope."""
+
+    supported_check_targets = set(review_input.review_targets)
+    unsupported_check_targets: list[ManagerImplementationReviewCheckTarget] = []
+    for review_finding in review_findings:
+        if (
+            review_finding.check_target not in supported_check_targets
+            and review_finding.check_target not in unsupported_check_targets
+        ):
+            unsupported_check_targets.append(review_finding.check_target)
+    return tuple(unsupported_check_targets)
 
 
 def _is_requirement_review_approved(
