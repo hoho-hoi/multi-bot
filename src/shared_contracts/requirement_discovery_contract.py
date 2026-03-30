@@ -166,6 +166,7 @@ class ManagerImplementationReviewCheckTarget(StrEnum):
     RELATED_ISSUE_TRACEABILITY = "RELATED_ISSUE_TRACEABILITY"
     ACCEPTANCE_CRITERIA = "ACCEPTANCE_CRITERIA"
     SINGLE_PULL_REQUEST_SCOPE = "SINGLE_PULL_REQUEST_SCOPE"
+    BASE_BRANCH_POLICY = "BASE_BRANCH_POLICY"
     TEST_EVIDENCE = "TEST_EVIDENCE"
 
 
@@ -1408,6 +1409,7 @@ class ImplementationPullRequestCreatePayload:
 
     Attributes:
         branch_name: Suggested branch name that should be pushed before opening the pull request.
+        base_branch_name: Target branch that the implementation pull request must use.
         pull_request_title: Suggested pull request title for the implementation change.
         pull_request_body_summary: Summary content that should appear in the pull request body.
         test_evidence: Collected local verification evidence for the implementation change.
@@ -1420,6 +1422,7 @@ class ImplementationPullRequestCreatePayload:
     """
 
     branch_name: str
+    base_branch_name: str
     pull_request_title: str
     pull_request_body_summary: str
     test_evidence: tuple[str, ...]
@@ -1435,6 +1438,12 @@ class ImplementationPullRequestCreatePayload:
 
         if not self.branch_name.strip():
             raise ValueError("branch_name must not be empty.")
+        if not self.base_branch_name.strip():
+            raise ValueError("base_branch_name must not be empty.")
+        if self.base_branch_name != _IMPLEMENTATION_PULL_REQUEST_BASE_BRANCH:
+            raise ValueError(
+                f"base_branch_name must be {_IMPLEMENTATION_PULL_REQUEST_BASE_BRANCH}."
+            )
         if not self.pull_request_title.strip():
             raise ValueError("pull_request_title must not be empty.")
         if not self.pull_request_body_summary.strip():
@@ -1472,6 +1481,7 @@ class OpenedImplementationPullRequestMetadata:
     Attributes:
         pull_request_number: Repository-local pull request number visible on GitHub.
         branch_name: Source branch that carries the implementation change.
+        base_branch_name: Target branch that received the implementation pull request.
         pull_request_title: Opened pull request title under review.
         pull_request_body_summary: Human-readable summary of the implementation pull request.
         test_evidence: Collected local verification evidence attached to the pull request.
@@ -1484,6 +1494,7 @@ class OpenedImplementationPullRequestMetadata:
 
     pull_request_number: int
     branch_name: str
+    base_branch_name: str
     pull_request_title: str
     pull_request_body_summary: str
     test_evidence: tuple[str, ...]
@@ -1500,6 +1511,12 @@ class OpenedImplementationPullRequestMetadata:
             raise ValueError("pull_request_number must be greater than zero.")
         if not self.branch_name.strip():
             raise ValueError("branch_name must not be empty.")
+        if not self.base_branch_name.strip():
+            raise ValueError("base_branch_name must not be empty.")
+        if self.base_branch_name != _IMPLEMENTATION_PULL_REQUEST_BASE_BRANCH:
+            raise ValueError(
+                f"base_branch_name must be {_IMPLEMENTATION_PULL_REQUEST_BASE_BRANCH}."
+            )
         if not self.pull_request_title.strip():
             raise ValueError("pull_request_title must not be empty.")
         if not self.pull_request_body_summary.strip():
@@ -1539,6 +1556,7 @@ class OpenedImplementationPullRequestMetadata:
         return cls(
             pull_request_number=pull_request_number,
             branch_name=pull_request_create_payload.branch_name,
+            base_branch_name=pull_request_create_payload.base_branch_name,
             pull_request_title=pull_request_create_payload.pull_request_title,
             pull_request_body_summary=pull_request_create_payload.pull_request_body_summary,
             test_evidence=pull_request_create_payload.test_evidence,
@@ -1665,6 +1683,7 @@ class ManagerImplementationReviewInput:
     Attributes:
         pull_request_number: Opened pull request number when GitHub metadata is available.
         branch_name: Source branch that carries the implementation change.
+        base_branch_name: Target branch that the implementation pull request must use.
         pull_request_title: Opened implementation pull request title under review.
         pull_request_summary: Human-readable summary of the implementation pull request.
         related_issue_identifier: Repository-qualified implementation issue reference.
@@ -1679,6 +1698,7 @@ class ManagerImplementationReviewInput:
 
     pull_request_number: int | None
     branch_name: str
+    base_branch_name: str
     pull_request_title: str
     pull_request_summary: str
     related_issue_identifier: str
@@ -1697,6 +1717,12 @@ class ManagerImplementationReviewInput:
             raise ValueError("pull_request_number must be greater than zero when provided.")
         if not self.branch_name.strip():
             raise ValueError("branch_name must not be empty.")
+        if not self.base_branch_name.strip():
+            raise ValueError("base_branch_name must not be empty.")
+        if self.base_branch_name != _IMPLEMENTATION_PULL_REQUEST_BASE_BRANCH:
+            raise ValueError(
+                f"base_branch_name must be {_IMPLEMENTATION_PULL_REQUEST_BASE_BRANCH}."
+            )
         if not self.pull_request_title.strip():
             raise ValueError("pull_request_title must not be empty.")
         if not self.pull_request_summary.strip():
@@ -2064,10 +2090,14 @@ _MANAGER_REQUIREMENT_REVIEW_FOCUS_AREAS = (
     ManagerRequirementReviewFocusArea.DOCUMENT_CROSS_CHECK,
 )
 
+_IMPLEMENTATION_PULL_REQUEST_BASE_BRANCH = "main"
+
+
 _MANAGER_IMPLEMENTATION_REVIEW_CHECK_TARGETS = (
     ManagerImplementationReviewCheckTarget.RELATED_ISSUE_TRACEABILITY,
     ManagerImplementationReviewCheckTarget.ACCEPTANCE_CRITERIA,
     ManagerImplementationReviewCheckTarget.SINGLE_PULL_REQUEST_SCOPE,
+    ManagerImplementationReviewCheckTarget.BASE_BRANCH_POLICY,
     ManagerImplementationReviewCheckTarget.TEST_EVIDENCE,
 )
 
@@ -3043,6 +3073,7 @@ def build_implementation_pull_request_open_result(
                 issue_number=issue_work_item_contract.issue_number,
                 issue_title=issue_work_item_contract.issue_title,
             ),
+            base_branch_name=_IMPLEMENTATION_PULL_REQUEST_BASE_BRANCH,
             pull_request_title=(
                 f"Implement issue #{issue_work_item_contract.issue_number}: "
                 f"{issue_work_item_contract.issue_title}"
@@ -3102,6 +3133,7 @@ def build_manager_implementation_review_input_result(
     if opened_pull_request_metadata is not None:
         pull_request_number: int | None = opened_pull_request_metadata.pull_request_number
         branch_name = opened_pull_request_metadata.branch_name
+        base_branch_name = opened_pull_request_metadata.base_branch_name
         pull_request_title = opened_pull_request_metadata.pull_request_title
         pull_request_summary = opened_pull_request_metadata.pull_request_body_summary
         test_evidence = opened_pull_request_metadata.test_evidence
@@ -3115,6 +3147,7 @@ def build_manager_implementation_review_input_result(
             raise ValueError("Implementation review source must be available after validation.")
         pull_request_number = None
         branch_name = pull_request_create_payload.branch_name
+        base_branch_name = pull_request_create_payload.base_branch_name
         pull_request_title = pull_request_create_payload.pull_request_title
         pull_request_summary = pull_request_create_payload.pull_request_body_summary
         test_evidence = pull_request_create_payload.test_evidence
@@ -3132,6 +3165,7 @@ def build_manager_implementation_review_input_result(
         review_input=ManagerImplementationReviewInput(
             pull_request_number=pull_request_number,
             branch_name=branch_name,
+            base_branch_name=base_branch_name,
             pull_request_title=pull_request_title,
             pull_request_summary=pull_request_summary,
             related_issue_identifier=related_issue_identifier,

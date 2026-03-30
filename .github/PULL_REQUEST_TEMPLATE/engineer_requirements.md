@@ -5,6 +5,12 @@ Closes #<issue_number>
 - [ ] 新しいテストを追加し、そのテストが失敗すること（Red）を `make test` で確認した。
 - [ ] 実装を追加 / 修正し、同じテストが成功すること（Green）を `make test` で確認した。
 - [ ] `make lint` を実行し、すべてのエラーを解消した。
+- [ ] この PR の base branch は `main` であり、stacked PR ではない。
+- [ ] 関連 Issue は `main` 反映確認が完了するまで close しない。
+
+## Main Reflection Verification
+- [ ] `main` 反映確認の方法を記載した（commit / branch / file diff のいずれか）。
+- Verification evidence:
 
 ## Self-Walkthrough（要件と実装・テストの対応）
 

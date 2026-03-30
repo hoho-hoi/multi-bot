@@ -53,6 +53,7 @@ def create_implementation_pull_request_create_payload() -> ImplementationPullReq
 
     return ImplementationPullRequestCreatePayload(
         branch_name="feature/issue-45-manager-implementation-review-input",
+        base_branch_name="main",
         pull_request_title="Implement issue #45: Build manager implementation review input",
         pull_request_body_summary=(
             "Prepare the strict manager input required to review the engineer pull request."
@@ -85,6 +86,7 @@ def create_opened_implementation_pull_request_metadata() -> OpenedImplementation
     return OpenedImplementationPullRequestMetadata(
         pull_request_number=77,
         branch_name="feature/issue-45-manager-implementation-review-input",
+        base_branch_name="main",
         pull_request_title="Implement issue #45: Build manager implementation review input",
         pull_request_body_summary=(
             "Prepare the strict manager input required to review the engineer pull request."
@@ -122,6 +124,7 @@ def test_build_manager_implementation_review_input_from_payload_returns_ready() 
     assert result.status is ManagerImplementationReviewInputStatus.READY
     assert result.missing_information_items == ()
     assert result.review_input is not None
+    assert result.review_input.base_branch_name == "main"
     assert result.review_input.related_issue_identifier == "example-owner/multi-bot#45"
     assert result.review_input.acceptance_criteria == (
         "Return a strict manager implementation review input model.",
@@ -131,6 +134,7 @@ def test_build_manager_implementation_review_input_from_payload_returns_ready() 
         ManagerImplementationReviewCheckTarget.RELATED_ISSUE_TRACEABILITY,
         ManagerImplementationReviewCheckTarget.ACCEPTANCE_CRITERIA,
         ManagerImplementationReviewCheckTarget.SINGLE_PULL_REQUEST_SCOPE,
+        ManagerImplementationReviewCheckTarget.BASE_BRANCH_POLICY,
         ManagerImplementationReviewCheckTarget.TEST_EVIDENCE,
     )
     assert (
@@ -155,6 +159,7 @@ def test_build_manager_implementation_review_input_from_opened_metadata_returns_
     assert result.status is ManagerImplementationReviewInputStatus.READY
     assert result.review_input is not None
     assert result.review_input.pull_request_number == 77
+    assert result.review_input.base_branch_name == "main"
     assert result.review_input.related_issue_title == (
         "Build manager implementation review input from opened implementation PR"
     )
@@ -162,6 +167,41 @@ def test_build_manager_implementation_review_input_from_opened_metadata_returns_
         "make test passed for the manager implementation review input flow.",
         "make lint passed for the manager implementation review input flow.",
     )
+
+
+def test_opened_implementation_pull_request_metadata_requires_main_base_branch() -> None:
+    try:
+        OpenedImplementationPullRequestMetadata(
+            pull_request_number=77,
+            branch_name="feature/issue-45-manager-implementation-review-input",
+            base_branch_name="feature/stacked-base",
+            pull_request_title="Implement issue #45: Build manager implementation review input",
+            pull_request_body_summary=(
+                "Prepare the strict manager input required to review the engineer pull request."
+            ),
+            test_evidence=(
+                "make test passed for the manager implementation review input flow.",
+                "make lint passed for the manager implementation review input flow.",
+            ),
+            related_issue_identifier="example-owner/multi-bot#45",
+            related_issue_title=(
+                "Build manager implementation review input from opened implementation PR"
+            ),
+            issue_overview=(
+                "Build the strict manager review input model from an opened implementation PR."
+            ),
+            acceptance_criteria=(
+                "Return a strict manager implementation review input model.",
+                "Expose review targets and transition context for OP_REVIEW_ENGINEER_PR.",
+            ),
+            single_pull_request_scope=(
+                "Limit the work to strict review input preparation for one implementation PR."
+            ),
+        )
+    except ValueError as error:
+        assert str(error) == "base_branch_name must be main."
+    else:
+        raise AssertionError("Expected ValueError for non-main opened PR base branch.")
 
 
 def test_build_manager_implementation_review_input_requires_pull_request_source() -> None:

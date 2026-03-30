@@ -98,6 +98,7 @@ def test_build_implementation_pull_request_open_result_returns_ready_payload() -
     assert result.pull_request_create_payload.branch_name == (
         "feature/issue-37-prepare-implementation-pr-creation-payload-from-engineer-execution-output"
     )
+    assert result.pull_request_create_payload.base_branch_name == "main"
     assert result.pull_request_create_payload.pull_request_title == (
         "Implement issue #37: Prepare implementation PR creation payload from engineer "
         "execution output"
@@ -178,3 +179,47 @@ def test_build_implementation_pull_request_open_result_rejects_unsupported_state
     assert result.next_state is RequirementDiscoverySessionState.PR_OPEN
     assert result.pull_request_create_payload is None
     assert result.missing_information_items == ()
+
+
+def test_implementation_pull_request_create_payload_requires_main_base_branch() -> None:
+    try:
+        build_implementation_pull_request_open_result(
+            current_state=RequirementDiscoverySessionState.ENGINEER_JOB_RUNNING,
+            work_item_contract=create_engineer_execution_work_item_contract(),
+            test_evidence=create_test_evidence(),
+            implementation_blocker_result=None,
+        ).pull_request_create_payload.__class__(
+            branch_name=(
+                "feature/issue-37-prepare-implementation-pr-creation-payload-from-engineer-"
+                "execution-output"
+            ),
+            base_branch_name="feature/stacked-base",
+            pull_request_title=(
+                "Implement issue #37: Prepare implementation PR creation payload from engineer "
+                "execution output"
+            ),
+            pull_request_body_summary=(
+                "Prepare the strict implementation pull request payload for engineer output."
+            ),
+            test_evidence=create_test_evidence(),
+            related_issue_identifier="example-owner/multi-bot#37",
+            related_issue_title=(
+                "Prepare implementation PR creation payload from engineer execution output"
+            ),
+            issue_overview=(
+                "Build the typed implementation pull request payload from the finished engineer "
+                "execution context."
+            ),
+            acceptance_criteria=(
+                "Return a strict implementation pull request payload.",
+                "Keep the workflow blocked when Engineer reported an implementation blocker.",
+            ),
+            single_pull_request_scope=(
+                "Limit the work to implementation pull request payload preparation."
+            ),
+            target_state=RequirementDiscoverySessionState.IMPLEMENTATION_PR_OPEN,
+        )
+    except ValueError as error:
+        assert str(error) == "base_branch_name must be main."
+    else:
+        raise AssertionError("Expected ValueError for non-main implementation PR base branch.")

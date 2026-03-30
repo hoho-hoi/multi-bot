@@ -113,6 +113,7 @@ def test_prepare_implementation_pull_request_from_engineer_execution_returns_rea
     assert result.status is ImplementationPullRequestOpenStatus.READY
     assert result.next_state is RequirementDiscoverySessionState.IMPLEMENTATION_PR_OPEN
     assert result.pull_request_create_payload is not None
+    assert result.pull_request_create_payload.base_branch_name == "main"
     assert result.pull_request_create_payload.related_issue_identifier == (
         "example-owner/multi-bot#37"
     )
