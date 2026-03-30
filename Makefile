@@ -1,40 +1,31 @@
-.PHONY: setup test lint format clean help check-virtual-environment
+.PHONY: setup test lint format clean help
 
 PYTHON_VERSION ?= 3.12
 UV ?= uv
-VIRTUAL_ENVIRONMENT_DIRECTORY := .venv
-VIRTUAL_ENVIRONMENT_BIN := $(VIRTUAL_ENVIRONMENT_DIRECTORY)/bin
-PYTEST_EXECUTABLE := $(VIRTUAL_ENVIRONMENT_BIN)/pytest
-RUFF_EXECUTABLE := $(VIRTUAL_ENVIRONMENT_BIN)/ruff
-MYPY_EXECUTABLE := $(VIRTUAL_ENVIRONMENT_BIN)/mypy
 
 setup:
-	$(UV) venv --python $(PYTHON_VERSION) $(VIRTUAL_ENVIRONMENT_DIRECTORY)
-	$(UV) pip install --python $(VIRTUAL_ENVIRONMENT_BIN)/python -e ".[dev]"
+	$(UV) sync --frozen --group dev --python $(PYTHON_VERSION)
 
-check-virtual-environment:
-	@test -x "$(VIRTUAL_ENVIRONMENT_BIN)/python" || (echo "Run 'make setup' first." && exit 1)
+test:
+	$(UV) run --frozen --python $(PYTHON_VERSION) pytest
 
-test: check-virtual-environment
-	$(PYTEST_EXECUTABLE)
+lint:
+	$(UV) run --frozen --python $(PYTHON_VERSION) ruff check .
+	$(UV) run --frozen --python $(PYTHON_VERSION) ruff format --check .
+	$(UV) run --frozen --python $(PYTHON_VERSION) mypy --strict src
 
-lint: check-virtual-environment
-	$(RUFF_EXECUTABLE) check .
-	$(RUFF_EXECUTABLE) format --check .
-	$(MYPY_EXECUTABLE) --strict src
-
-format: check-virtual-environment
-	$(RUFF_EXECUTABLE) check --fix .
-	$(RUFF_EXECUTABLE) format .
+format:
+	$(UV) run --frozen --python $(PYTHON_VERSION) ruff check --fix .
+	$(UV) run --frozen --python $(PYTHON_VERSION) ruff format .
 
 clean:
-	rm -rf "$(VIRTUAL_ENVIRONMENT_DIRECTORY)" .mypy_cache .pytest_cache .ruff_cache
+	rm -rf ".venv" .mypy_cache .pytest_cache .ruff_cache
 	rm -rf scratch/*
 
 help:
 	@echo "Available commands:"
-	@echo "  make setup   - Create a Python 3.12 virtual environment and install dev dependencies"
-	@echo "  make test    - Run the pytest suite"
-	@echo "  make lint    - Run Ruff checks and mypy strict type checking"
-	@echo "  make format  - Apply Ruff fixes and formatting"
+	@echo "  make setup   - Sync the uv-managed Python 3.12 environment from uv.lock"
+	@echo "  make test    - Run pytest through uv with the locked environment"
+	@echo "  make lint    - Run Ruff and mypy through uv with the locked environment"
+	@echo "  make format  - Apply Ruff fixes and formatting through uv"
 	@echo "  make clean   - Remove caches and the local virtual environment"

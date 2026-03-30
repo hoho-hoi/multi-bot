@@ -14,30 +14,51 @@ implementation issues can evolve `control_plane`, `worker_runtime`, and
 
 ## Local Setup
 
-The project uses `uv` to provision Python 3.12 and install development dependencies.
+The project uses `uv` as the source of truth for Python package management, dependency
+locking, and command execution. The committed `uv.lock` file is used for both local
+development and CI so the same dependency set is resolved everywhere.
 
 ```bash
 make setup
 ```
 
+The `make setup` target runs the equivalent `uv` command directly:
+
+```bash
+uv sync --frozen --group dev
+```
+
 ## Usage Examples
 
-Run static checks:
+Run static checks with the locked environment:
 
 ```bash
 make lint
 ```
 
-Run unit tests:
+Run the same test suite command directly through `uv`:
+
+```bash
+uv run --frozen pytest
+```
+
+Or use the Make target wrapper:
 
 ```bash
 make test
 ```
 
-Apply formatting:
+Apply formatting through `uv`:
 
 ```bash
 make format
+```
+
+Refresh the lock file after dependency changes:
+
+```bash
+uv lock
+uv sync --frozen --group dev
 ```
 
 List available commands:
