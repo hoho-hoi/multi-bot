@@ -3,6 +3,7 @@
 from shared_contracts.issue_contract import IssueWorkItemContract, RepositoryReference
 from shared_contracts.requirement_discovery_contract import (
     EngineerExecutionFocus,
+    EngineerExecutionWorkItemContract,
     EngineerJobInput,
     EngineerJobInputResult,
     EngineerJobInputStatus,
@@ -70,6 +71,7 @@ from shared_contracts.requirement_discovery_contract import (
 
 __all__ = [
     "IssueWorkItemContract",
+    "EngineerExecutionWorkItemContract",
     "EngineerExecutionFocus",
     "EngineerJobInput",
     "EngineerJobInputResult",
