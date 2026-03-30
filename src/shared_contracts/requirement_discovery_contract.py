@@ -15,6 +15,9 @@ class RequirementDiscoverySessionState(StrEnum):
     REQUIREMENT_APPROVED = "STATE_REQUIREMENT_APPROVED"
     MILESTONE_PLANNING = "STATE_MILESTONE_PLANNING"
     IMPLEMENTATION_BACKLOG_READY = "STATE_IMPLEMENTATION_BACKLOG_READY"
+    ENGINEER_JOB_RUNNING = "STATE_ENGINEER_JOB_RUNNING"
+    IMPLEMENTATION_BLOCKED = "STATE_IMPLEMENTATION_BLOCKED"
+    USER_DECISION_REQUIRED = "STATE_USER_DECISION_REQUIRED"
 
 
 class WorkerRoleName(StrEnum):
@@ -109,6 +112,22 @@ class ImplementationIssueCreationStatus(StrEnum):
 
 class EngineerJobInputStatus(StrEnum):
     """Enumerates outcomes for preparing the initial engineer job input."""
+
+    READY = "READY"
+    INPUT_REQUIRED = "INPUT_REQUIRED"
+    UNSUPPORTED_STATE = "UNSUPPORTED_STATE"
+
+
+class ImplementationBlockerStatus(StrEnum):
+    """Enumerates outcomes for preparing an implementation blocker report."""
+
+    READY = "READY"
+    INPUT_REQUIRED = "INPUT_REQUIRED"
+    UNSUPPORTED_STATE = "UNSUPPORTED_STATE"
+
+
+class UserDecisionEscalationStatus(StrEnum):
+    """Enumerates outcomes for preparing a user decision escalation draft."""
 
     READY = "READY"
     INPUT_REQUIRED = "INPUT_REQUIRED"
@@ -1279,6 +1298,202 @@ class EngineerJobInputResult:
 
 
 @dataclass(frozen=True, slots=True)
+class ImplementationBlockerDraft:
+    """Represents a typed implementation blocker draft for issue comment creation.
+
+    Attributes:
+        issue_title: Implementation issue title currently blocked.
+        blocker_summary: Human-readable blocker summary for manager review.
+        acceptance_criteria: Acceptance criteria that remain blocked.
+        single_pull_request_scope: Scope that Engineer could not complete safely.
+        related_issue_use_case: Use case advanced by the blocked implementation issue.
+        comment_body_draft: Draft issue comment body describing the blocker.
+    """
+
+    issue_title: str
+    blocker_summary: str
+    acceptance_criteria: tuple[str, ...]
+    single_pull_request_scope: str
+    related_issue_use_case: UseCaseIdentifier
+    comment_body_draft: str
+
+    def __post_init__(self) -> None:
+        """Validates the implementation blocker draft."""
+
+        if not self.issue_title.strip():
+            raise ValueError("issue_title must not be empty.")
+        if not self.blocker_summary.strip():
+            raise ValueError("blocker_summary must not be empty.")
+        if not self.acceptance_criteria:
+            raise ValueError("acceptance_criteria must not be empty.")
+        if any(
+            not acceptance_criterion.strip() for acceptance_criterion in self.acceptance_criteria
+        ):
+            raise ValueError("acceptance_criteria must not contain empty values.")
+        if len(set(self.acceptance_criteria)) != len(self.acceptance_criteria):
+            raise ValueError("acceptance_criteria must not contain duplicate values.")
+        if not self.single_pull_request_scope.strip():
+            raise ValueError("single_pull_request_scope must not be empty.")
+        if not self.comment_body_draft.strip():
+            raise ValueError("comment_body_draft must not be empty.")
+
+
+@dataclass(frozen=True, slots=True)
+class ImplementationBlockerResult:
+    """Represents whether Engineer can publish an implementation blocker report now.
+
+    Attributes:
+        status: High-level outcome for caller-side branching.
+        summary_message: Human-readable status summary for orchestration.
+        next_state: Workflow state after interpreting the blocker result.
+        missing_information_items: Missing inputs required before blocker reporting.
+        implementation_blocker_draft: Typed blocker draft when status is `READY`.
+    """
+
+    status: ImplementationBlockerStatus
+    summary_message: str
+    next_state: RequirementDiscoverySessionState
+    missing_information_items: tuple[str, ...] = ()
+    implementation_blocker_draft: ImplementationBlockerDraft | None = None
+
+    def __post_init__(self) -> None:
+        """Validates result consistency."""
+
+        if not self.summary_message.strip():
+            raise ValueError("summary_message must not be empty.")
+        if any(not missing_item.strip() for missing_item in self.missing_information_items):
+            raise ValueError("missing_information_items must not contain empty values.")
+        if len(set(self.missing_information_items)) != len(self.missing_information_items):
+            raise ValueError("missing_information_items must not contain duplicate values.")
+        if not isinstance(self.next_state, RequirementDiscoverySessionState):
+            raise ValueError("next_state must be a RequirementDiscoverySessionState value.")
+
+        if self.status is ImplementationBlockerStatus.READY:
+            if self.implementation_blocker_draft is None:
+                raise ValueError(
+                    "implementation_blocker_draft must be provided when status is READY."
+                )
+            if self.missing_information_items:
+                raise ValueError("missing_information_items must be empty when status is READY.")
+            if self.next_state is not RequirementDiscoverySessionState.IMPLEMENTATION_BLOCKED:
+                raise ValueError("next_state must be STATE_IMPLEMENTATION_BLOCKED when READY.")
+            return
+
+        if self.implementation_blocker_draft is not None:
+            raise ValueError("implementation_blocker_draft must be empty unless status is READY.")
+
+        if self.status is ImplementationBlockerStatus.INPUT_REQUIRED:
+            if not self.missing_information_items:
+                raise ValueError(
+                    "missing_information_items must not be empty when status is INPUT_REQUIRED."
+                )
+            if self.next_state is not RequirementDiscoverySessionState.ENGINEER_JOB_RUNNING:
+                raise ValueError(
+                    "next_state must be STATE_ENGINEER_JOB_RUNNING when status is INPUT_REQUIRED."
+                )
+            return
+
+        if self.missing_information_items:
+            raise ValueError(
+                "missing_information_items must be empty when status is UNSUPPORTED_STATE."
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class UserDecisionEscalationDraft:
+    """Represents a typed manager escalation draft that requests user direction.
+
+    Attributes:
+        issue_title: Implementation issue title that remains unresolved.
+        blocker_summary: Existing blocker summary that triggered escalation.
+        escalation_summary: Manager-side explanation for why user input is required.
+        requested_user_input: Specific direction the user must provide.
+        comment_body_draft: Draft issue comment body describing the escalation.
+    """
+
+    issue_title: str
+    blocker_summary: str
+    escalation_summary: str
+    requested_user_input: str
+    comment_body_draft: str
+
+    def __post_init__(self) -> None:
+        """Validates the user decision escalation draft."""
+
+        if not self.issue_title.strip():
+            raise ValueError("issue_title must not be empty.")
+        if not self.blocker_summary.strip():
+            raise ValueError("blocker_summary must not be empty.")
+        if not self.escalation_summary.strip():
+            raise ValueError("escalation_summary must not be empty.")
+        if not self.requested_user_input.strip():
+            raise ValueError("requested_user_input must not be empty.")
+        if not self.comment_body_draft.strip():
+            raise ValueError("comment_body_draft must not be empty.")
+
+
+@dataclass(frozen=True, slots=True)
+class UserDecisionEscalationResult:
+    """Represents whether Manager can escalate an implementation blocker to the user.
+
+    Attributes:
+        status: High-level outcome for caller-side branching.
+        summary_message: Human-readable status summary for orchestration.
+        next_state: Workflow state after interpreting the escalation result.
+        missing_information_items: Missing inputs required before escalation.
+        user_decision_escalation_draft: Typed escalation draft when status is `READY`.
+    """
+
+    status: UserDecisionEscalationStatus
+    summary_message: str
+    next_state: RequirementDiscoverySessionState
+    missing_information_items: tuple[str, ...] = ()
+    user_decision_escalation_draft: UserDecisionEscalationDraft | None = None
+
+    def __post_init__(self) -> None:
+        """Validates result consistency."""
+
+        if not self.summary_message.strip():
+            raise ValueError("summary_message must not be empty.")
+        if any(not missing_item.strip() for missing_item in self.missing_information_items):
+            raise ValueError("missing_information_items must not contain empty values.")
+        if len(set(self.missing_information_items)) != len(self.missing_information_items):
+            raise ValueError("missing_information_items must not contain duplicate values.")
+        if not isinstance(self.next_state, RequirementDiscoverySessionState):
+            raise ValueError("next_state must be a RequirementDiscoverySessionState value.")
+
+        if self.status is UserDecisionEscalationStatus.READY:
+            if self.user_decision_escalation_draft is None:
+                raise ValueError(
+                    "user_decision_escalation_draft must be provided when status is READY."
+                )
+            if self.missing_information_items:
+                raise ValueError("missing_information_items must be empty when status is READY.")
+            if self.next_state is not RequirementDiscoverySessionState.USER_DECISION_REQUIRED:
+                raise ValueError("next_state must be STATE_USER_DECISION_REQUIRED when READY.")
+            return
+
+        if self.user_decision_escalation_draft is not None:
+            raise ValueError("user_decision_escalation_draft must be empty unless status is READY.")
+
+        if self.status is UserDecisionEscalationStatus.INPUT_REQUIRED:
+            if not self.missing_information_items:
+                raise ValueError(
+                    "missing_information_items must not be empty when status is INPUT_REQUIRED."
+                )
+            if self.next_state is not RequirementDiscoverySessionState.IMPLEMENTATION_BLOCKED:
+                raise ValueError(
+                    "next_state must be STATE_IMPLEMENTATION_BLOCKED when status is INPUT_REQUIRED."
+                )
+            return
+
+        if self.missing_information_items:
+            raise ValueError(
+                "missing_information_items must be empty when status is UNSUPPORTED_STATE."
+            )
+
+
+@dataclass(frozen=True, slots=True)
 class RequirementDiscoverySessionSummary:
     """Summarizes the shared requirement discovery session state.
 
@@ -2216,6 +2431,246 @@ def build_engineer_job_input_result(
             related_issue_use_case=issue_create_payload.target_use_case,
         ),
     )
+
+
+def build_implementation_blocker_result(
+    session_summary: RequirementDiscoverySessionSummary,
+    engineer_job_input: EngineerJobInput | None,
+    blocker_summary: str | None,
+) -> ImplementationBlockerResult:
+    """Builds the strict implementation blocker result from an active engineer job.
+
+    Args:
+        session_summary: Current requirement discovery session snapshot.
+        engineer_job_input: Typed engineer job input for the blocked work item.
+        blocker_summary: Human-readable explanation of why implementation cannot proceed.
+
+    Returns:
+        A typed result describing whether Engineer can report the blocker immediately.
+
+    Example:
+        result = build_implementation_blocker_result(
+            session_summary=session_summary,
+            engineer_job_input=engineer_job_input,
+            blocker_summary="The required retry policy is missing from the shared contracts.",
+        )
+        if result.status is ImplementationBlockerStatus.READY:
+            assert result.implementation_blocker_draft is not None
+    """
+
+    if session_summary.current_state is not RequirementDiscoverySessionState.ENGINEER_JOB_RUNNING:
+        return ImplementationBlockerResult(
+            status=ImplementationBlockerStatus.UNSUPPORTED_STATE,
+            summary_message=(
+                "Implementation blocker reporting is not supported for workflow state "
+                f"{session_summary.current_state.value}."
+            ),
+            next_state=session_summary.current_state,
+        )
+
+    missing_information_items: list[str] = []
+    if engineer_job_input is None:
+        missing_information_items.append("engineer job input")
+    if blocker_summary is None or not blocker_summary.strip():
+        missing_information_items.append("implementation blocker summary")
+
+    if missing_information_items:
+        return ImplementationBlockerResult(
+            status=ImplementationBlockerStatus.INPUT_REQUIRED,
+            summary_message=(
+                "Engineer needs a strict job input and blocker summary before reporting an "
+                "implementation blocker."
+            ),
+            next_state=RequirementDiscoverySessionState.ENGINEER_JOB_RUNNING,
+            missing_information_items=tuple(missing_information_items),
+        )
+
+    if engineer_job_input is None or blocker_summary is None:
+        raise ValueError("Implementation blocker inputs must be available after validation.")
+
+    normalized_blocker_summary = blocker_summary.strip()
+    implementation_blocker_draft = ImplementationBlockerDraft(
+        issue_title=engineer_job_input.issue_title,
+        blocker_summary=normalized_blocker_summary,
+        acceptance_criteria=engineer_job_input.acceptance_criteria,
+        single_pull_request_scope=engineer_job_input.single_pull_request_scope,
+        related_issue_use_case=engineer_job_input.related_issue_use_case,
+        comment_body_draft=_build_implementation_blocker_comment_body_draft(
+            engineer_job_input=engineer_job_input,
+            blocker_summary=normalized_blocker_summary,
+        ),
+    )
+    return ImplementationBlockerResult(
+        status=ImplementationBlockerStatus.READY,
+        summary_message=(
+            "Prepared the implementation blocker draft and transitioned the workflow to "
+            "STATE_IMPLEMENTATION_BLOCKED."
+        ),
+        next_state=RequirementDiscoverySessionState.IMPLEMENTATION_BLOCKED,
+        implementation_blocker_draft=implementation_blocker_draft,
+    )
+
+
+def build_user_decision_escalation_result(
+    session_summary: RequirementDiscoverySessionSummary,
+    implementation_blocker_result: ImplementationBlockerResult | None,
+    escalation_summary: str | None,
+    requested_user_input: str | None,
+) -> UserDecisionEscalationResult:
+    """Builds the strict user decision escalation result from a reported blocker.
+
+    Args:
+        session_summary: Current requirement discovery session snapshot.
+        implementation_blocker_result: Ready blocker result that Manager reviewed.
+        escalation_summary: Manager explanation of why user direction is required.
+        requested_user_input: Specific product or scope decision requested from the user.
+
+    Returns:
+        A typed result describing whether Manager can escalate to the user immediately.
+
+    Example:
+        result = build_user_decision_escalation_result(
+            session_summary=session_summary,
+            implementation_blocker_result=implementation_blocker_result,
+            escalation_summary="Manager cannot choose the product trade-off alone.",
+            requested_user_input="Decide whether to add the missing state or reduce scope.",
+        )
+        if result.status is UserDecisionEscalationStatus.READY:
+            assert result.user_decision_escalation_draft is not None
+    """
+
+    if session_summary.current_state is not RequirementDiscoverySessionState.IMPLEMENTATION_BLOCKED:
+        return UserDecisionEscalationResult(
+            status=UserDecisionEscalationStatus.UNSUPPORTED_STATE,
+            summary_message=(
+                "User decision escalation is not supported for workflow state "
+                f"{session_summary.current_state.value}."
+            ),
+            next_state=session_summary.current_state,
+        )
+
+    missing_information_items: list[str] = []
+    if (
+        implementation_blocker_result is None
+        or implementation_blocker_result.status is not ImplementationBlockerStatus.READY
+    ):
+        missing_information_items.append("ready implementation blocker result")
+    if escalation_summary is None or not escalation_summary.strip():
+        missing_information_items.append("user escalation summary")
+    if requested_user_input is None or not requested_user_input.strip():
+        missing_information_items.append("requested user input")
+
+    if missing_information_items:
+        return UserDecisionEscalationResult(
+            status=UserDecisionEscalationStatus.INPUT_REQUIRED,
+            summary_message=(
+                "Manager needs the blocker result and a clear escalation request before "
+                "asking the user for direction."
+            ),
+            next_state=RequirementDiscoverySessionState.IMPLEMENTATION_BLOCKED,
+            missing_information_items=tuple(missing_information_items),
+        )
+
+    if (
+        implementation_blocker_result is None
+        or escalation_summary is None
+        or requested_user_input is None
+    ):
+        raise ValueError("User escalation inputs must be available after validation.")
+
+    implementation_blocker_draft = implementation_blocker_result.implementation_blocker_draft
+    if implementation_blocker_draft is None:
+        raise ValueError(
+            "implementation_blocker_draft must be available when blocker result is READY."
+        )
+
+    normalized_escalation_summary = escalation_summary.strip()
+    normalized_requested_user_input = requested_user_input.strip()
+    return UserDecisionEscalationResult(
+        status=UserDecisionEscalationStatus.READY,
+        summary_message=(
+            "Prepared the user decision escalation draft and transitioned the workflow to "
+            "STATE_USER_DECISION_REQUIRED."
+        ),
+        next_state=RequirementDiscoverySessionState.USER_DECISION_REQUIRED,
+        user_decision_escalation_draft=UserDecisionEscalationDraft(
+            issue_title=implementation_blocker_draft.issue_title,
+            blocker_summary=implementation_blocker_draft.blocker_summary,
+            escalation_summary=normalized_escalation_summary,
+            requested_user_input=normalized_requested_user_input,
+            comment_body_draft=_build_user_decision_escalation_comment_body_draft(
+                implementation_blocker_draft=implementation_blocker_draft,
+                escalation_summary=normalized_escalation_summary,
+                requested_user_input=normalized_requested_user_input,
+            ),
+        ),
+    )
+
+
+def _build_implementation_blocker_comment_body_draft(
+    engineer_job_input: EngineerJobInput,
+    blocker_summary: str,
+) -> str:
+    """Builds the issue comment body draft for an implementation blocker report."""
+
+    return "\n".join(
+        (
+            "## Implementation blocker report",
+            f"Issue: {engineer_job_input.issue_title}",
+            f"Related use case: {engineer_job_input.related_issue_use_case.value}",
+            "",
+            "### Blocker summary",
+            blocker_summary,
+            "",
+            "### Blocked acceptance criteria",
+            _format_bullet_lines(engineer_job_input.acceptance_criteria),
+            "",
+            "### Current single pull request scope",
+            engineer_job_input.single_pull_request_scope,
+            "",
+            "### Requested manager action",
+            (
+                "Review the blocker, confirm the missing prerequisite, and decide whether to "
+                "unblock the work or escalate to the user."
+            ),
+        )
+    )
+
+
+def _build_user_decision_escalation_comment_body_draft(
+    implementation_blocker_draft: ImplementationBlockerDraft,
+    escalation_summary: str,
+    requested_user_input: str,
+) -> str:
+    """Builds the issue comment body draft for a manager user-decision escalation."""
+
+    return "\n".join(
+        (
+            "## User decision required",
+            f"Issue: {implementation_blocker_draft.issue_title}",
+            "",
+            "### Escalation summary",
+            escalation_summary,
+            "",
+            "### Existing blocker summary",
+            implementation_blocker_draft.blocker_summary,
+            "",
+            "### Requested user input",
+            requested_user_input,
+            "",
+            "### Current single pull request scope",
+            implementation_blocker_draft.single_pull_request_scope,
+            "",
+            "### Blocked acceptance criteria",
+            _format_bullet_lines(implementation_blocker_draft.acceptance_criteria),
+        )
+    )
+
+
+def _format_bullet_lines(lines: tuple[str, ...]) -> str:
+    """Formats string values as Markdown bullet lines."""
+
+    return "\n".join(f"- {line}" for line in lines)
 
 
 def _build_requirement_document_update_drafts(
