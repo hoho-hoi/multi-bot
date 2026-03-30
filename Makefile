@@ -1,33 +1,31 @@
-.PHONY: test lint format clean help setup
+.PHONY: setup test lint format clean help
 
-# NOTE:
-# These targets are safe defaults to prevent CI from failing on a fresh clone.
-# Replace the placeholders with stack-specific commands once the toolchain is decided.
-# Keep the informational messages so callers know the real work is pending.
-
-test:
-	@echo "[INFO] No tests are defined yet. Add your test runner command here."
-	@echo "[INFO] Example: pytest tests/ or npm test"
-
-lint:
-	@echo "[INFO] No linters are configured yet. Add your lint command here."
-	@echo "[INFO] Example: ruff check . or eslint ."
-
-format:
-	@echo "[INFO] No formatter is configured yet. Add your format command here."
-	@echo "[INFO] Example: ruff format . or prettier --write ."
+PYTHON_VERSION ?= 3.12
+UV ?= uv
 
 setup:
-	@echo "No setup required or not implemented."
+	$(UV) sync --frozen --group dev --python $(PYTHON_VERSION)
+
+test:
+	$(UV) run --frozen --python $(PYTHON_VERSION) pytest
+
+lint:
+	$(UV) run --frozen --python $(PYTHON_VERSION) ruff check .
+	$(UV) run --frozen --python $(PYTHON_VERSION) ruff format --check .
+	$(UV) run --frozen --python $(PYTHON_VERSION) mypy --strict src
+
+format:
+	$(UV) run --frozen --python $(PYTHON_VERSION) ruff check --fix .
+	$(UV) run --frozen --python $(PYTHON_VERSION) ruff format .
 
 clean:
+	rm -rf ".venv" .mypy_cache .pytest_cache .ruff_cache
 	rm -rf scratch/*
-	@echo "Cleaned scratch directory."
 
 help:
 	@echo "Available commands:"
-	@echo "  make test    - Run tests"
-	@echo "  make lint    - Run linters"
-	@echo "  make format  - Format code"
-	@echo "  make setup   - Install dependencies"
-	@echo "  make clean   - Clean artifacts"
+	@echo "  make setup   - Sync the uv-managed Python 3.12 environment from uv.lock"
+	@echo "  make test    - Run pytest through uv with the locked environment"
+	@echo "  make lint    - Run Ruff and mypy through uv with the locked environment"
+	@echo "  make format  - Apply Ruff fixes and formatting through uv"
+	@echo "  make clean   - Remove caches and the local virtual environment"
