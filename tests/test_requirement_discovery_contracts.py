@@ -3,6 +3,10 @@ from shared_contracts import (
     RequirementCommentContract,
     RequirementDiscoverySessionState,
     RequirementDiscoverySessionSummary,
+    RequirementDocumentType,
+    RequirementDocumentUpdateDraft,
+    RequirementDocumentUpdateDraftResult,
+    RequirementDocumentUpdateDraftStatus,
     RequirementIssueContract,
     RequirementRepositoryContract,
 )
@@ -151,3 +155,66 @@ def test_requirement_discovery_session_summary_rejects_comment_for_different_iss
         assert str(error) == "latest_comment_contract must reference the same issue_contract."
     else:
         raise AssertionError("Expected latest_comment_contract validation to fail.")
+
+
+def test_requirement_document_update_draft_result_accepts_ready_status_with_candidates() -> None:
+    draft_result = RequirementDocumentUpdateDraftResult(
+        status=RequirementDocumentUpdateDraftStatus.READY,
+        summary_message="Update the requirement and use-case documents.",
+        source_prompt_summary="Clarify project goals and user workflow expectations.",
+        update_drafts=(
+            RequirementDocumentUpdateDraft(
+                document_type=RequirementDocumentType.REQUIREMENT,
+                update_focus="Refresh goals, constraints, and success criteria.",
+                rationale="The latest prompt clarified project goals.",
+            ),
+            RequirementDocumentUpdateDraft(
+                document_type=RequirementDocumentType.USE_CASES,
+                update_focus="Refine the primary actor workflow and edge cases.",
+                rationale="The latest prompt described the target user workflow.",
+            ),
+        ),
+    )
+
+    assert draft_result.status is RequirementDocumentUpdateDraftStatus.READY
+    assert draft_result.source_prompt_summary is not None
+    assert len(draft_result.update_drafts) == 2
+
+
+def test_requirement_document_update_draft_result_rejects_ready_status_without_candidates() -> None:
+    try:
+        RequirementDocumentUpdateDraftResult(
+            status=RequirementDocumentUpdateDraftStatus.READY,
+            summary_message="A summary without candidates is invalid.",
+            source_prompt_summary="Clarify the next document updates.",
+            update_drafts=(),
+        )
+    except ValueError as error:
+        assert str(error) == "update_drafts must not be empty when status is READY."
+    else:
+        raise AssertionError("Expected READY draft validation to fail without candidates.")
+
+
+def test_requirement_document_update_draft_result_rejects_duplicate_document_types() -> None:
+    try:
+        RequirementDocumentUpdateDraftResult(
+            status=RequirementDocumentUpdateDraftStatus.READY,
+            summary_message="Duplicate document candidates are not allowed.",
+            source_prompt_summary="Clarify requirement updates.",
+            update_drafts=(
+                RequirementDocumentUpdateDraft(
+                    document_type=RequirementDocumentType.REQUIREMENT,
+                    update_focus="Refresh the requirement overview.",
+                    rationale="The latest prompt changed the goal.",
+                ),
+                RequirementDocumentUpdateDraft(
+                    document_type=RequirementDocumentType.REQUIREMENT,
+                    update_focus="Refresh the requirement constraints.",
+                    rationale="The latest prompt changed the constraints.",
+                ),
+            ),
+        )
+    except ValueError as error:
+        assert str(error) == "update_drafts must not contain duplicate document_type values."
+    else:
+        raise AssertionError("Expected duplicate document_type validation to fail.")

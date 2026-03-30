@@ -6,6 +6,8 @@ from shared_contracts import (
     RequirementDiscoverySessionState,
     RequirementDiscoverySessionSummary,
     RequirementDiscoveryWorkItemContract,
+    RequirementDocumentType,
+    RequirementDocumentUpdateDraftStatus,
     RequirementIssueContract,
     RequirementRepositoryContract,
     WorkerRoleName,
@@ -97,6 +99,10 @@ def test_execute_requirement_discovery_work_item_builds_initial_architect_bootst
     assert "implement worker-runtime architect response bootstrap" in (
         result.architect_response_message.lower()
     )
+    assert result.document_update_draft_result.status is (
+        RequirementDocumentUpdateDraftStatus.INPUT_REQUIRED
+    )
+    assert result.document_update_draft_result.update_drafts == ()
 
 
 def test_execute_requirement_discovery_work_item_continues_architect_bootstrap() -> None:
@@ -119,6 +125,27 @@ def test_execute_requirement_discovery_work_item_continues_architect_bootstrap()
     assert "clarify reliability, logging, and edge-case expectations." in (
         result.architect_response_message.lower()
     )
+    assert result.document_update_draft_result.status is RequirementDocumentUpdateDraftStatus.READY
+    assert result.document_update_draft_result.source_prompt_summary is not None
+    assert {draft.document_type for draft in result.document_update_draft_result.update_drafts} == {
+        RequirementDocumentType.REQUIREMENT
+    }
+
+
+def test_execute_requirement_discovery_work_item_returns_no_updates_for_no_change_intent() -> None:
+    work_item_contract = create_requirement_discovery_work_item_contract(
+        current_state=RequirementDiscoverySessionState.DISCOVERY_IN_PROGRESS,
+        latest_comment_contract=create_requirement_comment_contract(),
+        latest_prompt_summary="No document updates are needed after the latest clarification.",
+    )
+
+    result = execute_requirement_discovery_work_item(work_item_contract)
+
+    assert isinstance(result, RequirementDiscoveryBootstrapSuccess)
+    assert result.document_update_draft_result.status is (
+        RequirementDocumentUpdateDraftStatus.NO_UPDATES_NEEDED
+    )
+    assert result.document_update_draft_result.update_drafts == ()
 
 
 def test_execute_requirement_discovery_work_item_rejects_unsupported_role() -> None:

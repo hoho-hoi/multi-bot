@@ -27,6 +27,25 @@ class ProviderName(StrEnum):
     OPENAI = "openai"
 
 
+class RequirementDocumentType(StrEnum):
+    """Enumerates requirement documents that can receive draft updates."""
+
+    REQUIREMENT = "docs/REQUIREMENT.md"
+    USE_CASES = "docs/USE_CASES.md"
+    DOMAIN_ER = "docs/DOMAIN_ER.md"
+    INTERACTION_FLOW = "docs/INTERACTION_FLOW.md"
+    ARCHITECTURE_DIAGRAM = "docs/ARCHITECTURE_DIAGRAM.md"
+
+
+class RequirementDocumentUpdateDraftStatus(StrEnum):
+    """Enumerates outcomes for document update draft generation."""
+
+    READY = "READY"
+    INPUT_REQUIRED = "INPUT_REQUIRED"
+    NO_UPDATES_NEEDED = "NO_UPDATES_NEEDED"
+    UNSUPPORTED_STATE = "UNSUPPORTED_STATE"
+
+
 @dataclass(frozen=True, slots=True)
 class RequirementRepositoryContract:
     """Represents repository metadata required for requirement discovery.
@@ -103,6 +122,66 @@ class RequirementCommentContract:
 
 
 @dataclass(frozen=True, slots=True)
+class RequirementDocumentUpdateDraft:
+    """Represents one document update candidate for requirement discovery.
+
+    Attributes:
+        document_type: Strictly typed target document under `docs/`.
+        update_focus: Human-readable description of what should change.
+        rationale: Why the latest requirement intent maps to this document.
+    """
+
+    document_type: RequirementDocumentType
+    update_focus: str
+    rationale: str
+
+    def __post_init__(self) -> None:
+        """Validates the draft fields."""
+
+        if not self.update_focus.strip():
+            raise ValueError("update_focus must not be empty.")
+        if not self.rationale.strip():
+            raise ValueError("rationale must not be empty.")
+
+
+@dataclass(frozen=True, slots=True)
+class RequirementDocumentUpdateDraftResult:
+    """Represents a typed summary of requirement document update candidates.
+
+    Attributes:
+        status: High-level outcome for draft generation.
+        summary_message: Human-readable summary for Architect workflow consumers.
+        source_prompt_summary: Latest intent summary used to derive the draft.
+        update_drafts: Typed document update candidates when status is `READY`.
+    """
+
+    status: RequirementDocumentUpdateDraftStatus
+    summary_message: str
+    source_prompt_summary: str | None = None
+    update_drafts: tuple[RequirementDocumentUpdateDraft, ...] = ()
+
+    def __post_init__(self) -> None:
+        """Validates result consistency."""
+
+        if not self.summary_message.strip():
+            raise ValueError("summary_message must not be empty.")
+        if self.source_prompt_summary is not None and not self.source_prompt_summary.strip():
+            raise ValueError("source_prompt_summary must not be empty when provided.")
+
+        if self.status is RequirementDocumentUpdateDraftStatus.READY:
+            if self.source_prompt_summary is None:
+                raise ValueError("source_prompt_summary must be provided when status is READY.")
+            if not self.update_drafts:
+                raise ValueError("update_drafts must not be empty when status is READY.")
+        elif self.update_drafts:
+            raise ValueError("update_drafts must be empty unless status is READY.")
+
+        document_types = tuple(draft.document_type for draft in self.update_drafts)
+        if len(set(document_types)) != len(document_types):
+            raise ValueError("update_drafts must not contain duplicate document_type values.")
+
+
+@dataclass(frozen=True, slots=True)
 class RequirementDiscoverySessionSummary:
     """Summarizes the shared requirement discovery session state.
 
@@ -149,6 +228,196 @@ class RequirementDiscoverySessionSummary:
             issue_contract=issue_contract,
             current_state=RequirementDiscoverySessionState.ISSUE_READY,
         )
+
+
+@dataclass(frozen=True, slots=True)
+class _RequirementDocumentUpdateRule:
+    """Defines a keyword-based mapping from intent text to a document draft."""
+
+    document_type: RequirementDocumentType
+    keywords: tuple[str, ...]
+    update_focus: str
+    rationale: str
+
+
+_NO_UPDATES_INDICATORS = (
+    "no document updates",
+    "no updates are needed",
+    "nothing to update",
+    "no changes needed",
+    "documents are unchanged",
+)
+
+_REQUIREMENT_DOCUMENT_UPDATE_RULES = (
+    _RequirementDocumentUpdateRule(
+        document_type=RequirementDocumentType.REQUIREMENT,
+        keywords=(
+            "goal",
+            "scope",
+            "success",
+            "criteria",
+            "constraint",
+            "requirement",
+            "reliability",
+            "logging",
+            "audit",
+            "observability",
+            "security",
+            "rollback",
+            "edge case",
+            "edge-case",
+        ),
+        update_focus=(
+            "Refresh goals, constraints, and acceptance criteria in the main requirement document."
+        ),
+        rationale=(
+            "The latest intent changes requirement-level expectations that "
+            "belong in the main requirement summary."
+        ),
+    ),
+    _RequirementDocumentUpdateRule(
+        document_type=RequirementDocumentType.USE_CASES,
+        keywords=("use case", "workflow", "actor", "journey", "scenario", "user flow"),
+        update_focus="Refine actor goals, workflow steps, and representative error cases.",
+        rationale=(
+            "The latest intent changes user-facing workflows that belong in the use-case catalog."
+        ),
+    ),
+    _RequirementDocumentUpdateRule(
+        document_type=RequirementDocumentType.DOMAIN_ER,
+        keywords=("entity", "domain", "relationship", "relation", "data model", "schema"),
+        update_focus="Update entities, ownership boundaries, and important relationships.",
+        rationale=(
+            "The latest intent changes domain concepts that belong in the ER documentation."
+        ),
+    ),
+    _RequirementDocumentUpdateRule(
+        document_type=RequirementDocumentType.INTERACTION_FLOW,
+        keywords=(
+            "state",
+            "transition",
+            "interaction flow",
+            "approval flow",
+            "sequence",
+            "lifecycle",
+        ),
+        update_focus="Revise workflow states, transitions, and branching conditions.",
+        rationale=(
+            "The latest intent changes state progression that belongs in the "
+            "interaction flow document."
+        ),
+    ),
+    _RequirementDocumentUpdateRule(
+        document_type=RequirementDocumentType.ARCHITECTURE_DIAGRAM,
+        keywords=(
+            "architecture",
+            "component",
+            "boundary",
+            "integration",
+            "adapter",
+            "provider",
+            "runtime",
+        ),
+        update_focus="Adjust component boundaries and runtime integration responsibilities.",
+        rationale=(
+            "The latest intent changes structural boundaries that belong in "
+            "the architecture diagram."
+        ),
+    ),
+)
+
+
+def build_requirement_document_update_draft_result(
+    session_summary: RequirementDiscoverySessionSummary,
+) -> RequirementDocumentUpdateDraftResult:
+    """Builds a typed draft summary for requirement document updates.
+
+    Args:
+        session_summary: Current requirement discovery session snapshot.
+
+    Returns:
+        A typed result describing whether document update candidates are ready.
+
+    Example:
+        result = build_requirement_document_update_draft_result(session_summary)
+        if result.status is RequirementDocumentUpdateDraftStatus.READY:
+            assert result.update_drafts
+    """
+
+    if session_summary.current_state is RequirementDiscoverySessionState.ISSUE_READY:
+        return RequirementDocumentUpdateDraftResult(
+            status=RequirementDocumentUpdateDraftStatus.INPUT_REQUIRED,
+            summary_message=(
+                "Collect a concrete requirement intent before proposing document updates."
+            ),
+        )
+
+    if session_summary.current_state is not RequirementDiscoverySessionState.DISCOVERY_IN_PROGRESS:
+        return RequirementDocumentUpdateDraftResult(
+            status=RequirementDocumentUpdateDraftStatus.UNSUPPORTED_STATE,
+            summary_message=(
+                "Document update drafts are not supported for workflow state "
+                f"{session_summary.current_state.value}."
+            ),
+        )
+
+    latest_prompt_summary = session_summary.latest_prompt_summary
+    if latest_prompt_summary is None:
+        return RequirementDocumentUpdateDraftResult(
+            status=RequirementDocumentUpdateDraftStatus.INPUT_REQUIRED,
+            summary_message=(
+                "latest_prompt_summary is required before proposing document updates."
+            ),
+        )
+
+    normalized_prompt_summary = latest_prompt_summary.casefold()
+    if any(indicator in normalized_prompt_summary for indicator in _NO_UPDATES_INDICATORS):
+        return RequirementDocumentUpdateDraftResult(
+            status=RequirementDocumentUpdateDraftStatus.NO_UPDATES_NEEDED,
+            summary_message=(
+                "The latest requirement intent explicitly reported that no "
+                "document updates are needed."
+            ),
+            source_prompt_summary=latest_prompt_summary,
+        )
+
+    update_drafts = _build_requirement_document_update_drafts(normalized_prompt_summary)
+    if not update_drafts:
+        return RequirementDocumentUpdateDraftResult(
+            status=RequirementDocumentUpdateDraftStatus.NO_UPDATES_NEEDED,
+            summary_message=(
+                "The latest requirement intent did not map to a supported "
+                "document update candidate."
+            ),
+            source_prompt_summary=latest_prompt_summary,
+        )
+
+    return RequirementDocumentUpdateDraftResult(
+        status=RequirementDocumentUpdateDraftStatus.READY,
+        summary_message=(
+            f"Prepared {len(update_drafts)} requirement document update draft candidates."
+        ),
+        source_prompt_summary=latest_prompt_summary,
+        update_drafts=update_drafts,
+    )
+
+
+def _build_requirement_document_update_drafts(
+    normalized_prompt_summary: str,
+) -> tuple[RequirementDocumentUpdateDraft, ...]:
+    """Builds typed draft candidates from a normalized prompt summary."""
+
+    update_drafts: list[RequirementDocumentUpdateDraft] = []
+    for update_rule in _REQUIREMENT_DOCUMENT_UPDATE_RULES:
+        if any(keyword in normalized_prompt_summary for keyword in update_rule.keywords):
+            update_drafts.append(
+                RequirementDocumentUpdateDraft(
+                    document_type=update_rule.document_type,
+                    update_focus=update_rule.update_focus,
+                    rationale=update_rule.rationale,
+                )
+            )
+    return tuple(update_drafts)
 
 
 @dataclass(frozen=True, slots=True)

@@ -7,7 +7,9 @@ from shared_contracts import (
     RequirementDiscoverySessionState,
     RequirementDiscoverySessionSummary,
     RequirementDiscoveryWorkItemContract,
+    RequirementDocumentUpdateDraftResult,
     WorkerRoleName,
+    build_requirement_document_update_draft_result,
 )
 
 
@@ -64,11 +66,13 @@ class RequirementDiscoveryBootstrapSuccess:
         work_item_contract: Shared payload received from control-plane.
         updated_session_summary: Session summary to persist after the bootstrap step.
         architect_response_message: Minimal Architect-facing response text.
+        document_update_draft_result: Typed summary of candidate `docs/` updates.
     """
 
     work_item_contract: RequirementDiscoveryWorkItemContract
     updated_session_summary: RequirementDiscoverySessionSummary
     architect_response_message: str
+    document_update_draft_result: RequirementDocumentUpdateDraftResult
 
 
 @dataclass(frozen=True, slots=True)
@@ -156,6 +160,7 @@ def _bootstrap_issue_ready_requirement_discovery(
 
     session_summary = work_item_contract.session_summary
     issue_contract = session_summary.issue_contract
+    document_update_draft_result = build_requirement_document_update_draft_result(session_summary)
     updated_session_summary = RequirementDiscoverySessionSummary(
         issue_contract=issue_contract,
         current_state=RequirementDiscoverySessionState.DISCOVERY_IN_PROGRESS,
@@ -174,6 +179,7 @@ def _bootstrap_issue_ready_requirement_discovery(
         work_item_contract=work_item_contract,
         updated_session_summary=updated_session_summary,
         architect_response_message=architect_response_message,
+        document_update_draft_result=document_update_draft_result,
     )
 
 
@@ -196,6 +202,7 @@ def _bootstrap_in_progress_requirement_discovery(
         )
 
     issue_contract = session_summary.issue_contract
+    document_update_draft_result = build_requirement_document_update_draft_result(session_summary)
     updated_session_summary = RequirementDiscoverySessionSummary(
         issue_contract=issue_contract,
         current_state=RequirementDiscoverySessionState.DISCOVERY_IN_PROGRESS,
@@ -211,4 +218,5 @@ def _bootstrap_in_progress_requirement_discovery(
         work_item_contract=work_item_contract,
         updated_session_summary=updated_session_summary,
         architect_response_message=architect_response_message,
+        document_update_draft_result=document_update_draft_result,
     )
