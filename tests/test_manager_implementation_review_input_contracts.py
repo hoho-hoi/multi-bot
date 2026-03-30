@@ -136,6 +136,7 @@ def test_build_manager_implementation_review_input_from_payload_returns_ready() 
         ManagerImplementationReviewCheckTarget.SINGLE_PULL_REQUEST_SCOPE,
         ManagerImplementationReviewCheckTarget.BASE_BRANCH_POLICY,
         ManagerImplementationReviewCheckTarget.TEST_EVIDENCE,
+        ManagerImplementationReviewCheckTarget.DOCUMENTATION_ALIGNMENT,
     )
     assert (
         result.review_input.transition_context.required_operation
