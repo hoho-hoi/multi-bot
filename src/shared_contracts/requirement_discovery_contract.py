@@ -1,3 +1,4 @@
+import re
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -16,6 +17,7 @@ class RequirementDiscoverySessionState(StrEnum):
     MILESTONE_PLANNING = "STATE_MILESTONE_PLANNING"
     IMPLEMENTATION_BACKLOG_READY = "STATE_IMPLEMENTATION_BACKLOG_READY"
     ENGINEER_JOB_RUNNING = "STATE_ENGINEER_JOB_RUNNING"
+    IMPLEMENTATION_PR_OPEN = "STATE_IMPLEMENTATION_PR_OPEN"
     IMPLEMENTATION_BLOCKED = "STATE_IMPLEMENTATION_BLOCKED"
     USER_DECISION_REQUIRED = "STATE_USER_DECISION_REQUIRED"
 
@@ -115,6 +117,15 @@ class EngineerJobInputStatus(StrEnum):
 
     READY = "READY"
     INPUT_REQUIRED = "INPUT_REQUIRED"
+    UNSUPPORTED_STATE = "UNSUPPORTED_STATE"
+
+
+class ImplementationPullRequestOpenStatus(StrEnum):
+    """Enumerates outcomes for preparing implementation pull request payloads."""
+
+    READY = "READY"
+    INPUT_REQUIRED = "INPUT_REQUIRED"
+    BLOCKED = "BLOCKED"
     UNSUPPORTED_STATE = "UNSUPPORTED_STATE"
 
 
@@ -1368,6 +1379,133 @@ class EngineerExecutionWorkItemContract:
 
 
 @dataclass(frozen=True, slots=True)
+class ImplementationPullRequestCreatePayload:
+    """Represents the typed payload required to open an implementation pull request.
+
+    Attributes:
+        branch_name: Suggested branch name that should be pushed before opening the pull request.
+        pull_request_title: Suggested pull request title for the implementation change.
+        pull_request_body_summary: Summary content that should appear in the pull request body.
+        test_evidence: Collected local verification evidence for the implementation change.
+        related_issue_identifier: Repository-qualified issue reference linked to the pull request.
+        target_state: Workflow state reached once the pull request is opened.
+    """
+
+    branch_name: str
+    pull_request_title: str
+    pull_request_body_summary: str
+    test_evidence: tuple[str, ...]
+    related_issue_identifier: str
+    target_state: RequirementDiscoverySessionState
+
+    def __post_init__(self) -> None:
+        """Validates the implementation pull request payload."""
+
+        if not self.branch_name.strip():
+            raise ValueError("branch_name must not be empty.")
+        if not self.pull_request_title.strip():
+            raise ValueError("pull_request_title must not be empty.")
+        if not self.pull_request_body_summary.strip():
+            raise ValueError("pull_request_body_summary must not be empty.")
+        if not self.test_evidence:
+            raise ValueError("test_evidence must not be empty.")
+        if any(not evidence_item.strip() for evidence_item in self.test_evidence):
+            raise ValueError("test_evidence must not contain empty values.")
+        if len(set(self.test_evidence)) != len(self.test_evidence):
+            raise ValueError("test_evidence must not contain duplicate values.")
+        if not self.related_issue_identifier.strip():
+            raise ValueError("related_issue_identifier must not be empty.")
+        if self.target_state is not RequirementDiscoverySessionState.IMPLEMENTATION_PR_OPEN:
+            raise ValueError("target_state must be STATE_IMPLEMENTATION_PR_OPEN.")
+
+
+@dataclass(frozen=True, slots=True)
+class ImplementationPullRequestOpenResult:
+    """Represents whether an implementation pull request can be opened next.
+
+    Attributes:
+        status: High-level outcome for caller-side branching.
+        summary_message: Human-readable summary for the next workflow step.
+        next_state: Workflow state selected after interpreting the result.
+        missing_information_items: Missing inputs that should be collected before opening a PR.
+        pull_request_create_payload: Strict implementation PR payload when status is `READY`.
+        blocker_summary: Existing blocker summary when the workflow remains blocked.
+    """
+
+    status: ImplementationPullRequestOpenStatus
+    summary_message: str
+    next_state: RequirementDiscoverySessionState
+    missing_information_items: tuple[str, ...] = ()
+    pull_request_create_payload: ImplementationPullRequestCreatePayload | None = None
+    blocker_summary: str | None = None
+
+    def __post_init__(self) -> None:
+        """Validates implementation pull request result consistency."""
+
+        if not self.summary_message.strip():
+            raise ValueError("summary_message must not be empty.")
+        if any(not missing_item.strip() for missing_item in self.missing_information_items):
+            raise ValueError("missing_information_items must not contain empty values.")
+        if len(set(self.missing_information_items)) != len(self.missing_information_items):
+            raise ValueError("missing_information_items must not contain duplicate values.")
+        if not isinstance(self.next_state, RequirementDiscoverySessionState):
+            raise ValueError("next_state must be a RequirementDiscoverySessionState value.")
+        if self.blocker_summary is not None and not self.blocker_summary.strip():
+            raise ValueError("blocker_summary must not be empty when provided.")
+
+        if self.status is ImplementationPullRequestOpenStatus.READY:
+            if self.pull_request_create_payload is None:
+                raise ValueError(
+                    "pull_request_create_payload must be provided when status is READY."
+                )
+            if self.missing_information_items:
+                raise ValueError("missing_information_items must be empty when status is READY.")
+            if self.blocker_summary is not None:
+                raise ValueError("blocker_summary must be empty when status is READY.")
+            if self.next_state is not RequirementDiscoverySessionState.IMPLEMENTATION_PR_OPEN:
+                raise ValueError(
+                    "next_state must be STATE_IMPLEMENTATION_PR_OPEN when status is READY."
+                )
+            return
+
+        if self.pull_request_create_payload is not None:
+            raise ValueError("pull_request_create_payload must be empty unless status is READY.")
+
+        if self.status is ImplementationPullRequestOpenStatus.INPUT_REQUIRED:
+            if not self.missing_information_items:
+                raise ValueError(
+                    "missing_information_items must not be empty when status is INPUT_REQUIRED."
+                )
+            if self.blocker_summary is not None:
+                raise ValueError("blocker_summary must be empty when status is INPUT_REQUIRED.")
+            if self.next_state not in (
+                RequirementDiscoverySessionState.ENGINEER_JOB_RUNNING,
+                RequirementDiscoverySessionState.IMPLEMENTATION_BLOCKED,
+            ):
+                raise ValueError(
+                    "next_state must be STATE_ENGINEER_JOB_RUNNING or "
+                    "STATE_IMPLEMENTATION_BLOCKED when status is INPUT_REQUIRED."
+                )
+            return
+
+        if self.status is ImplementationPullRequestOpenStatus.BLOCKED:
+            if self.missing_information_items:
+                raise ValueError("missing_information_items must be empty when status is BLOCKED.")
+            if self.blocker_summary is None:
+                raise ValueError("blocker_summary must be provided when status is BLOCKED.")
+            if self.next_state is not RequirementDiscoverySessionState.IMPLEMENTATION_BLOCKED:
+                raise ValueError("next_state must be STATE_IMPLEMENTATION_BLOCKED when BLOCKED.")
+            return
+
+        if self.missing_information_items:
+            raise ValueError(
+                "missing_information_items must be empty when status is UNSUPPORTED_STATE."
+            )
+        if self.blocker_summary is not None:
+            raise ValueError("blocker_summary must be empty when status is UNSUPPORTED_STATE.")
+
+
+@dataclass(frozen=True, slots=True)
 class ImplementationBlockerDraft:
     """Represents a typed implementation blocker draft for issue comment creation.
 
@@ -2503,6 +2641,150 @@ def build_engineer_job_input_result(
     )
 
 
+def build_implementation_pull_request_open_result(
+    *,
+    current_state: RequirementDiscoverySessionState,
+    work_item_contract: EngineerExecutionWorkItemContract | None,
+    test_evidence: tuple[str, ...] | None,
+    implementation_blocker_result: ImplementationBlockerResult | None,
+) -> ImplementationPullRequestOpenResult:
+    """Builds the strict result for opening the next implementation pull request.
+
+    Args:
+        current_state: Workflow state observed before preparing the implementation pull request.
+        work_item_contract: Validated engineer execution work item for the running implementation.
+        test_evidence: Local verification evidence collected after implementation completed.
+        implementation_blocker_result: Existing blocker result when implementation is blocked.
+
+    Returns:
+        A typed result describing whether implementation pull request creation can proceed now.
+
+    Example:
+        result = build_implementation_pull_request_open_result(
+            current_state=RequirementDiscoverySessionState.ENGINEER_JOB_RUNNING,
+            work_item_contract=work_item_contract,
+            test_evidence=("make test passed.", "make lint passed."),
+            implementation_blocker_result=None,
+        )
+        if result.status is ImplementationPullRequestOpenStatus.READY:
+            assert result.pull_request_create_payload is not None
+    """
+
+    if current_state not in (
+        RequirementDiscoverySessionState.ENGINEER_JOB_RUNNING,
+        RequirementDiscoverySessionState.IMPLEMENTATION_BLOCKED,
+    ):
+        return ImplementationPullRequestOpenResult(
+            status=ImplementationPullRequestOpenStatus.UNSUPPORTED_STATE,
+            summary_message=(
+                "Implementation pull request opening is not supported for workflow state "
+                f"{current_state.value}."
+            ),
+            next_state=current_state,
+        )
+
+    if current_state is RequirementDiscoverySessionState.IMPLEMENTATION_BLOCKED:
+        if (
+            implementation_blocker_result is not None
+            and implementation_blocker_result.status is ImplementationBlockerStatus.READY
+        ):
+            implementation_blocker_draft = (
+                implementation_blocker_result.implementation_blocker_draft
+            )
+            if implementation_blocker_draft is None:
+                raise ValueError(
+                    "implementation_blocker_draft must be available when blocker result is READY."
+                )
+            return ImplementationPullRequestOpenResult(
+                status=ImplementationPullRequestOpenStatus.BLOCKED,
+                summary_message=(
+                    "Implementation remains blocked, so no implementation pull request payload "
+                    "will be created."
+                ),
+                next_state=RequirementDiscoverySessionState.IMPLEMENTATION_BLOCKED,
+                blocker_summary=implementation_blocker_draft.blocker_summary,
+            )
+
+        return ImplementationPullRequestOpenResult(
+            status=ImplementationPullRequestOpenStatus.INPUT_REQUIRED,
+            summary_message=(
+                "The workflow is already blocked, so a ready implementation blocker result is "
+                "required instead of an implementation pull request payload."
+            ),
+            next_state=RequirementDiscoverySessionState.IMPLEMENTATION_BLOCKED,
+            missing_information_items=("ready implementation blocker result",),
+        )
+
+    if (
+        implementation_blocker_result is not None
+        and implementation_blocker_result.status is ImplementationBlockerStatus.READY
+    ):
+        implementation_blocker_draft = implementation_blocker_result.implementation_blocker_draft
+        if implementation_blocker_draft is None:
+            raise ValueError(
+                "implementation_blocker_draft must be available when blocker result is READY."
+            )
+        return ImplementationPullRequestOpenResult(
+            status=ImplementationPullRequestOpenStatus.BLOCKED,
+            summary_message=(
+                "Implementation reported a blocker, so no implementation pull request payload "
+                "will be created."
+            ),
+            next_state=RequirementDiscoverySessionState.IMPLEMENTATION_BLOCKED,
+            blocker_summary=implementation_blocker_draft.blocker_summary,
+        )
+
+    normalized_test_evidence = _normalize_test_evidence(test_evidence)
+    missing_information_items: list[str] = []
+    if work_item_contract is None:
+        missing_information_items.append("engineer execution work item contract")
+    if normalized_test_evidence is None:
+        missing_information_items.append("test evidence")
+
+    if missing_information_items:
+        return ImplementationPullRequestOpenResult(
+            status=ImplementationPullRequestOpenStatus.INPUT_REQUIRED,
+            summary_message=(
+                "Engineer needs a validated execution work item and local test evidence before "
+                "opening the implementation pull request."
+            ),
+            next_state=RequirementDiscoverySessionState.ENGINEER_JOB_RUNNING,
+            missing_information_items=tuple(missing_information_items),
+        )
+
+    if work_item_contract is None or normalized_test_evidence is None:
+        raise ValueError("Implementation pull request inputs must be available after validation.")
+
+    issue_work_item_contract = work_item_contract.issue_work_item_contract
+    engineer_job_input = work_item_contract.engineer_job_input
+    related_issue_identifier = issue_work_item_contract.to_issue_identifier()
+    return ImplementationPullRequestOpenResult(
+        status=ImplementationPullRequestOpenStatus.READY,
+        summary_message=(
+            "Implementation pull request payload is ready and can transition to "
+            "STATE_IMPLEMENTATION_PR_OPEN."
+        ),
+        next_state=RequirementDiscoverySessionState.IMPLEMENTATION_PR_OPEN,
+        pull_request_create_payload=ImplementationPullRequestCreatePayload(
+            branch_name=_build_implementation_pull_request_branch_name(
+                issue_number=issue_work_item_contract.issue_number,
+                issue_title=issue_work_item_contract.issue_title,
+            ),
+            pull_request_title=(
+                f"Implement issue #{issue_work_item_contract.issue_number}: "
+                f"{issue_work_item_contract.issue_title}"
+            ),
+            pull_request_body_summary=_build_implementation_pull_request_body_summary(
+                related_issue_identifier=related_issue_identifier,
+                engineer_job_input=engineer_job_input,
+            ),
+            test_evidence=normalized_test_evidence,
+            related_issue_identifier=related_issue_identifier,
+            target_state=RequirementDiscoverySessionState.IMPLEMENTATION_PR_OPEN,
+        ),
+    )
+
+
 def build_implementation_blocker_result(
     session_summary: RequirementDiscoverySessionSummary,
     engineer_job_input: EngineerJobInput | None,
@@ -2677,6 +2959,39 @@ def build_user_decision_escalation_result(
     )
 
 
+def _build_implementation_pull_request_branch_name(*, issue_number: int, issue_title: str) -> str:
+    """Builds a deterministic branch name for an implementation pull request."""
+
+    normalized_issue_title = re.sub(r"^\[[^\]]+\]\s*", "", issue_title.strip())
+    issue_slug = re.sub(r"[^a-z0-9]+", "-", normalized_issue_title.casefold()).strip("-")
+    if not issue_slug:
+        raise ValueError("issue_title must produce a non-empty branch slug.")
+    return f"feature/issue-{issue_number}-{issue_slug}"
+
+
+def _build_implementation_pull_request_body_summary(
+    *,
+    related_issue_identifier: str,
+    engineer_job_input: EngineerJobInput,
+) -> str:
+    """Builds the summary text for an implementation pull request body."""
+
+    return "\n".join(
+        (
+            f"Implement `{related_issue_identifier}`.",
+            "",
+            "## Summary",
+            engineer_job_input.issue_overview,
+            "",
+            "## Scope",
+            engineer_job_input.single_pull_request_scope,
+            "",
+            "## Acceptance Criteria",
+            _format_bullet_lines(engineer_job_input.acceptance_criteria),
+        )
+    )
+
+
 def _build_implementation_blocker_comment_body_draft(
     engineer_job_input: EngineerJobInput,
     blocker_summary: str,
@@ -2741,6 +3056,20 @@ def _format_bullet_lines(lines: tuple[str, ...]) -> str:
     """Formats string values as Markdown bullet lines."""
 
     return "\n".join(f"- {line}" for line in lines)
+
+
+def _normalize_test_evidence(test_evidence: tuple[str, ...] | None) -> tuple[str, ...] | None:
+    """Normalizes and validates implementation pull request test evidence."""
+
+    if test_evidence is None:
+        return None
+    if not test_evidence:
+        return None
+    if any(not evidence_item.strip() for evidence_item in test_evidence):
+        raise ValueError("test_evidence must not contain empty values.")
+    if len(set(test_evidence)) != len(test_evidence):
+        raise ValueError("test_evidence must not contain duplicate values.")
+    return test_evidence
 
 
 def _build_requirement_document_update_drafts(
