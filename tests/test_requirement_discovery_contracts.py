@@ -1,4 +1,8 @@
 from shared_contracts import (
+    ManagerRequirementReviewCycleContext,
+    ManagerRequirementReviewCycleTrigger,
+    ManagerRequirementReviewFocusArea,
+    ManagerRequirementReviewInputStatus,
     RepositoryReference,
     RequirementCommentContract,
     RequirementDiscoverySessionState,
@@ -8,8 +12,12 @@ from shared_contracts import (
     RequirementDocumentUpdateDraftResult,
     RequirementDocumentUpdateDraftStatus,
     RequirementIssueContract,
+    RequirementPullRequestCreatePayload,
+    RequirementPullRequestOpenStatus,
     RequirementPullRequestPreparationStatus,
     RequirementRepositoryContract,
+    build_manager_requirement_review_input_result,
+    build_requirement_pull_request_open_result,
     build_requirement_pull_request_preparation_result,
 )
 
@@ -44,6 +52,16 @@ def create_requirement_comment_contract() -> RequirementCommentContract:
         issue_contract=create_requirement_issue_contract(),
         comment_identifier="comment-789",
         comment_body="Architect needs more detail about session state ownership.",
+    )
+
+
+def create_manager_requirement_review_cycle_context() -> ManagerRequirementReviewCycleContext:
+    """Creates a manager review cycle context for requirement review tests."""
+
+    return ManagerRequirementReviewCycleContext(
+        review_round_number=1,
+        review_cycle_trigger=ManagerRequirementReviewCycleTrigger.PULL_REQUEST_OPENED,
+        review_goal_summary="Initial requirement review for the opened pull request.",
     )
 
 
@@ -267,3 +285,158 @@ def test_build_requirement_pull_request_preparation_result_lists_missing_informa
         "constraints",
         "success criteria",
     )
+
+
+def test_build_requirement_pull_request_open_result_returns_ready_payload() -> None:
+    session_summary = RequirementDiscoverySessionSummary(
+        issue_contract=create_requirement_issue_contract(),
+        current_state=RequirementDiscoverySessionState.DISCOVERY_IN_PROGRESS,
+        latest_comment_contract=create_requirement_comment_contract(),
+        latest_prompt_summary=(
+            "Clarify the project goal, security constraints, success criteria, "
+            "user workflow, and architecture boundaries."
+        ),
+    )
+
+    result = build_requirement_pull_request_open_result(session_summary)
+
+    assert result.status is RequirementPullRequestOpenStatus.READY
+    assert result.source_prompt_summary == session_summary.latest_prompt_summary
+    assert result.next_state is RequirementDiscoverySessionState.PR_OPEN
+    assert result.missing_information_items == ()
+    assert result.pull_request_create_payload is not None
+    assert result.pull_request_create_payload.target_state is (
+        RequirementDiscoverySessionState.PR_OPEN
+    )
+    assert {
+        document_type for document_type in result.pull_request_create_payload.updated_documents
+    } == {
+        RequirementDocumentType.REQUIREMENT,
+        RequirementDocumentType.USE_CASES,
+        RequirementDocumentType.ARCHITECTURE_DIAGRAM,
+    }
+
+
+def test_build_requirement_pull_request_open_result_returns_additional_question_result() -> None:
+    session_summary = RequirementDiscoverySessionSummary(
+        issue_contract=create_requirement_issue_contract(),
+        current_state=RequirementDiscoverySessionState.DISCOVERY_IN_PROGRESS,
+        latest_comment_contract=create_requirement_comment_contract(),
+        latest_prompt_summary="Clarify the user workflow before updating docs.",
+    )
+
+    result = build_requirement_pull_request_open_result(session_summary)
+
+    assert result.status is RequirementPullRequestOpenStatus.INPUT_REQUIRED
+    assert result.next_state is RequirementDiscoverySessionState.DISCOVERY_IN_PROGRESS
+    assert result.pull_request_create_payload is None
+    assert result.missing_information_items == (
+        "project goal",
+        "constraints",
+        "success criteria",
+    )
+
+
+def test_build_manager_requirement_review_input_result_returns_ready_input() -> None:
+    session_summary = RequirementDiscoverySessionSummary(
+        issue_contract=create_requirement_issue_contract(),
+        current_state=RequirementDiscoverySessionState.PR_OPEN,
+        latest_comment_contract=create_requirement_comment_contract(),
+        latest_prompt_summary=(
+            "Clarify the project goal, security constraints, success criteria, "
+            "user workflow, and architecture boundaries."
+        ),
+    )
+
+    result = build_manager_requirement_review_input_result(
+        session_summary=session_summary,
+        pull_request_create_payload=RequirementPullRequestCreatePayload(
+            pull_request_title="docs: finalize requirements for issue #5",
+            pull_request_body_summary="Update use cases and architecture boundaries.",
+            updated_documents=(
+                RequirementDocumentType.USE_CASES,
+                RequirementDocumentType.ARCHITECTURE_DIAGRAM,
+            ),
+            target_state=RequirementDiscoverySessionState.PR_OPEN,
+        ),
+        review_cycle_context=create_manager_requirement_review_cycle_context(),
+    )
+
+    assert result.status is ManagerRequirementReviewInputStatus.READY
+    assert result.missing_information_items == ()
+    assert result.review_input is not None
+    assert result.review_input.documents_to_review == (
+        RequirementDocumentType.REQUIREMENT,
+        RequirementDocumentType.USE_CASES,
+        RequirementDocumentType.ARCHITECTURE_DIAGRAM,
+    )
+    assert result.review_input.review_cycle_context.review_round_number == 1
+    assert ManagerRequirementReviewFocusArea.DOCUMENT_CROSS_CHECK in (
+        result.review_input.review_focus_areas
+    )
+
+
+def test_build_manager_requirement_review_input_result_requires_updated_documents() -> None:
+    session_summary = RequirementDiscoverySessionSummary(
+        issue_contract=create_requirement_issue_contract(),
+        current_state=RequirementDiscoverySessionState.PR_OPEN,
+        latest_comment_contract=create_requirement_comment_contract(),
+        latest_prompt_summary="Manager is ready to review the opened requirement pull request.",
+    )
+
+    result = build_manager_requirement_review_input_result(
+        session_summary=session_summary,
+        pull_request_create_payload=None,
+        review_cycle_context=create_manager_requirement_review_cycle_context(),
+    )
+
+    assert result.status is ManagerRequirementReviewInputStatus.INPUT_REQUIRED
+    assert result.review_input is None
+    assert result.missing_information_items == ("updated requirement documents",)
+
+
+def test_build_manager_requirement_review_input_result_requires_review_cycle_context() -> None:
+    session_summary = RequirementDiscoverySessionSummary(
+        issue_contract=create_requirement_issue_contract(),
+        current_state=RequirementDiscoverySessionState.PR_OPEN,
+        latest_comment_contract=create_requirement_comment_contract(),
+        latest_prompt_summary="Manager is ready to review the opened requirement pull request.",
+    )
+
+    result = build_manager_requirement_review_input_result(
+        session_summary=session_summary,
+        pull_request_create_payload=RequirementPullRequestCreatePayload(
+            pull_request_title="docs: finalize requirements for issue #5",
+            pull_request_body_summary="Update the requirement overview and constraints.",
+            updated_documents=(RequirementDocumentType.REQUIREMENT,),
+            target_state=RequirementDiscoverySessionState.PR_OPEN,
+        ),
+        review_cycle_context=None,
+    )
+
+    assert result.status is ManagerRequirementReviewInputStatus.INPUT_REQUIRED
+    assert result.review_input is None
+    assert result.missing_information_items == ("review cycle context",)
+
+
+def test_build_manager_requirement_review_input_result_rejects_unsupported_state() -> None:
+    session_summary = RequirementDiscoverySessionSummary(
+        issue_contract=create_requirement_issue_contract(),
+        current_state=RequirementDiscoverySessionState.DISCOVERY_IN_PROGRESS,
+        latest_comment_contract=create_requirement_comment_contract(),
+        latest_prompt_summary="Manager is ready to review the opened requirement pull request.",
+    )
+
+    result = build_manager_requirement_review_input_result(
+        session_summary=session_summary,
+        pull_request_create_payload=RequirementPullRequestCreatePayload(
+            pull_request_title="docs: finalize requirements for issue #5",
+            pull_request_body_summary="Update the requirement overview and constraints.",
+            updated_documents=(RequirementDocumentType.REQUIREMENT,),
+            target_state=RequirementDiscoverySessionState.PR_OPEN,
+        ),
+        review_cycle_context=create_manager_requirement_review_cycle_context(),
+    )
+
+    assert result.status is ManagerRequirementReviewInputStatus.UNSUPPORTED_STATE
+    assert result.review_input is None

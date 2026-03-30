@@ -9,6 +9,7 @@ from shared_contracts import (
     RequirementDocumentType,
     RequirementDocumentUpdateDraftStatus,
     RequirementIssueContract,
+    RequirementPullRequestOpenStatus,
     RequirementPullRequestPreparationStatus,
     RequirementRepositoryContract,
     WorkerRoleName,
@@ -156,6 +157,11 @@ def test_execute_requirement_discovery_work_item_returns_ready_preparation() -> 
         RequirementDocumentType.USE_CASES,
         RequirementDocumentType.ARCHITECTURE_DIAGRAM,
     }
+    assert result.pull_request_open_result.status is RequirementPullRequestOpenStatus.READY
+    assert result.pull_request_open_result.pull_request_create_payload is not None
+    assert result.pull_request_open_result.pull_request_create_payload.target_state is (
+        RequirementDiscoverySessionState.PR_OPEN
+    )
 
 
 def test_execute_requirement_discovery_work_item_returns_no_updates_for_no_change_intent() -> None:
@@ -172,6 +178,8 @@ def test_execute_requirement_discovery_work_item_returns_no_updates_for_no_chang
         RequirementDocumentUpdateDraftStatus.NO_UPDATES_NEEDED
     )
     assert result.document_update_draft_result.update_drafts == ()
+    assert result.pull_request_open_result.status is RequirementPullRequestOpenStatus.INPUT_REQUIRED
+    assert result.pull_request_open_result.pull_request_create_payload is None
 
 
 def test_execute_requirement_discovery_work_item_rejects_unsupported_role() -> None:
