@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 
 from control_plane import (
@@ -17,12 +17,25 @@ from shared_contracts import (
     ImplementationPullRequestOpenResult,
     ImplementationPullRequestOpenStatus,
     IssueWorkItemContract,
+    ManagerImplementationReviewCheckTarget,
+    ManagerImplementationReviewDecisionFinding,
+    ManagerImplementationReviewDecisionResult,
+    ManagerImplementationReviewExecutionPayload,
+    ManagerImplementationReviewExecutionResult,
+    ManagerImplementationReviewExecutionStatus,
+    ManagerImplementationReviewInput,
+    ManagerImplementationReviewInputResult,
+    ManagerImplementationReviewInputStatus,
+    OpenedImplementationPullRequestMetadata,
     RequirementDiscoverySessionState,
     RequirementDiscoverySessionSummary,
     RequirementDocumentUpdateDraftResult,
     RequirementPullRequestOpenResult,
     RequirementPullRequestPreparationResult,
     build_implementation_pull_request_open_result,
+    build_manager_implementation_review_decision_result,
+    build_manager_implementation_review_execution_result,
+    build_manager_implementation_review_input_result,
 )
 from worker_runtime import (
     EngineerBlockerReportingPolicy,
@@ -227,6 +240,79 @@ class EngineerExecutionIntegrationResult:
         return self.failure is None
 
 
+@dataclass(frozen=True, slots=True)
+class ManagerImplementationReviewApplicationResult:
+    """Represents the application-level implementation review outcome.
+
+    Attributes:
+        review_input_result: Typed result for preparing manager review input from the opened
+            implementation pull request metadata.
+        decision_result: Typed review decision result when review input preparation succeeded.
+        execution_result: Typed execution result when review input preparation succeeded.
+    """
+
+    review_input_result: ManagerImplementationReviewInputResult
+    decision_result: ManagerImplementationReviewDecisionResult | None
+    execution_result: ManagerImplementationReviewExecutionResult | None
+
+    def __post_init__(self) -> None:
+        """Validates application-level review result consistency."""
+
+        if self.review_input_result.status is ManagerImplementationReviewInputStatus.READY:
+            if self.decision_result is None:
+                raise ValueError(
+                    "decision_result must be provided when review_input_result is READY."
+                )
+            if self.execution_result is None:
+                raise ValueError(
+                    "execution_result must be provided when review_input_result is READY."
+                )
+            return
+
+        if self.decision_result is not None:
+            raise ValueError("decision_result must be empty unless review_input_result is READY.")
+        if self.execution_result is not None:
+            raise ValueError("execution_result must be empty unless review_input_result is READY.")
+
+    @property
+    def review_input(self) -> ManagerImplementationReviewInput | None:
+        """Returns the strict review input when review input preparation succeeded."""
+
+        return self.review_input_result.review_input
+
+    @property
+    def review_in_progress_state(self) -> RequirementDiscoverySessionState | None:
+        """Returns the in-progress state entered before execution branching."""
+
+        if self.review_input is None:
+            return None
+        return self.review_input.transition_context.next_state
+
+    @property
+    def next_state(self) -> RequirementDiscoverySessionState | None:
+        """Returns the next state selected by the review execution result."""
+
+        if self.execution_result is None:
+            return None
+        return self.execution_result.next_state
+
+    @property
+    def review_execution_payload(self) -> ManagerImplementationReviewExecutionPayload | None:
+        """Returns the review execution payload when GitHub review submission is ready."""
+
+        if self.execution_result is None:
+            return None
+        return self.execution_result.review_execution_payload
+
+    @property
+    def is_successful(self) -> bool:
+        """Returns whether the application flow completed through execution branching."""
+
+        if self.execution_result is None:
+            return False
+        return self.execution_result.status is ManagerImplementationReviewExecutionStatus.READY
+
+
 def generate_requirement_discovery_architect_response(
     session_summary: RequirementDiscoverySessionSummary,
 ) -> RequirementDiscoveryIntegrationResult:
@@ -388,6 +474,85 @@ def prepare_implementation_pull_request_from_engineer_execution(
     )
 
 
+def review_opened_implementation_pull_request(
+    *,
+    session_summary: RequirementDiscoverySessionSummary,
+    opened_pull_request_metadata: OpenedImplementationPullRequestMetadata | None,
+    review_findings: tuple[ManagerImplementationReviewDecisionFinding, ...],
+    retry_limit_reason: str | None,
+    escalation_reason: str | None,
+    declared_review_targets: tuple[ManagerImplementationReviewCheckTarget, ...] | None = None,
+) -> ManagerImplementationReviewApplicationResult:
+    """Builds the end-to-end manager implementation review application result.
+
+    Args:
+        session_summary: Current workflow session snapshot at the opened implementation PR.
+        opened_pull_request_metadata: Opened implementation pull request metadata to review.
+        review_findings: Typed findings collected during manager review.
+        retry_limit_reason: Rationale for escalating instead of requesting more retries.
+        escalation_reason: Rationale for requiring user direction.
+        declared_review_targets: Optional explicit review scope override for the current run.
+
+    Returns:
+        A strict application result that preserves the input, decision, and execution stages.
+
+    Example:
+        result = review_opened_implementation_pull_request(
+            session_summary=session_summary,
+            opened_pull_request_metadata=opened_pull_request_metadata,
+            review_findings=(),
+            retry_limit_reason=None,
+            escalation_reason=None,
+        )
+        if result.review_execution_payload is not None:
+            assert result.next_state is not None
+    """
+
+    review_input_result = build_manager_implementation_review_input_result(
+        session_summary=session_summary,
+        pull_request_create_payload=None,
+        opened_pull_request_metadata=opened_pull_request_metadata,
+    )
+    if review_input_result.status is not ManagerImplementationReviewInputStatus.READY:
+        return ManagerImplementationReviewApplicationResult(
+            review_input_result=review_input_result,
+            decision_result=None,
+            execution_result=None,
+        )
+
+    review_input = review_input_result.review_input
+    if review_input is None:
+        raise ValueError("review_input must be available when review_input_result is READY.")
+
+    if declared_review_targets is not None:
+        review_input = replace(review_input, review_targets=declared_review_targets)
+        review_input_result = ManagerImplementationReviewInputResult(
+            status=ManagerImplementationReviewInputStatus.READY,
+            summary_message=review_input_result.summary_message,
+            review_input=review_input,
+        )
+
+    decision_result = build_manager_implementation_review_decision_result(
+        review_input=review_input,
+        review_findings=review_findings,
+        retry_limit_reason=retry_limit_reason,
+        escalation_reason=escalation_reason,
+    )
+    execution_result = build_manager_implementation_review_execution_result(
+        session_summary=_build_manager_implementation_review_execution_session_summary(
+            session_summary=session_summary,
+            review_input=review_input,
+        ),
+        review_input=review_input,
+        decision_result=decision_result,
+    )
+    return ManagerImplementationReviewApplicationResult(
+        review_input_result=review_input_result,
+        decision_result=decision_result,
+        execution_result=execution_result,
+    )
+
+
 def _build_orchestration_failure_result(
     orchestration_result: RequirementDiscoveryOrchestrationFailure,
 ) -> RequirementDiscoveryIntegrationResult:
@@ -496,4 +661,19 @@ def _build_engineer_execution_success_result(
         execution_focus=bootstrap_result.execution_focus,
         blocker_reporting_policy=bootstrap_result.blocker_reporting_policy,
         failure=None,
+    )
+
+
+def _build_manager_implementation_review_execution_session_summary(
+    *,
+    session_summary: RequirementDiscoverySessionSummary,
+    review_input: ManagerImplementationReviewInput,
+) -> RequirementDiscoverySessionSummary:
+    """Builds the derived session summary required for review execution."""
+
+    return RequirementDiscoverySessionSummary(
+        issue_contract=session_summary.issue_contract,
+        current_state=review_input.transition_context.next_state,
+        latest_comment_contract=session_summary.latest_comment_contract,
+        latest_prompt_summary=session_summary.latest_prompt_summary,
     )
