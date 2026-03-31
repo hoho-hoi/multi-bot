@@ -152,6 +152,14 @@ class ManagerImplementationReviewExecutionStatus(StrEnum):
     UNSUPPORTED_STATE = "UNSUPPORTED_STATE"
 
 
+class ImplementationPostMergeDeliveryRoutingStatus(StrEnum):
+    """Enumerates outcomes for post-merge delivery routing preparation."""
+
+    READY = "READY"
+    INPUT_REQUIRED = "INPUT_REQUIRED"
+    UNSUPPORTED_STATE = "UNSUPPORTED_STATE"
+
+
 class ManagerImplementationReviewDecisionStatus(StrEnum):
     """Enumerates outcomes for manager implementation review decision building."""
 
@@ -199,6 +207,14 @@ class ManagerImplementationReviewDecision(StrEnum):
     APPROVE = "APPROVE"
     REQUEST_CHANGES = "REQUEST_CHANGES"
     USER_DECISION_REQUIRED = "USER_DECISION_REQUIRED"
+
+
+class ImplementationPostMergeDeliveryRoutingReason(StrEnum):
+    """Enumerates the supported post-merge delivery routing reasons."""
+
+    MORE_ISSUES_NEEDED_FOR_MILESTONE = "MORE_ISSUES_NEEDED_FOR_MILESTONE"
+    MILESTONE_COMPLETED = "MILESTONE_COMPLETED"
+    ALL_REQUIREMENTS_SATISFIED = "ALL_REQUIREMENTS_SATISFIED"
 
 
 class UseCaseIdentifier(StrEnum):
@@ -2117,6 +2133,130 @@ class ManagerImplementationReviewExecutionResult:
 
 
 @dataclass(frozen=True, slots=True)
+class ImplementationPostMergeDeliveryRoutingResult:
+    """Represents how delivery should proceed after an implementation PR merge.
+
+    Attributes:
+        status: High-level outcome for caller-side branching.
+        summary_message: Human-readable summary describing the routing decision.
+        next_state: Workflow state to continue with after interpreting the result.
+        missing_information_items: Missing routing inputs required before continuing.
+        routing_reason: Stable reason that explains the selected next state when status
+            is `READY`.
+        remaining_milestone_issue_count: Number of implementation issues still needed to
+            finish the current milestone when status is `READY`.
+        all_requirements_satisfied: Whether the full delivery scope is complete when
+            status is `READY`.
+    """
+
+    status: ImplementationPostMergeDeliveryRoutingStatus
+    summary_message: str
+    next_state: RequirementDiscoverySessionState
+    missing_information_items: tuple[str, ...] = ()
+    routing_reason: ImplementationPostMergeDeliveryRoutingReason | None = None
+    remaining_milestone_issue_count: int | None = None
+    all_requirements_satisfied: bool | None = None
+
+    def __post_init__(self) -> None:
+        """Validates post-merge delivery routing result consistency."""
+
+        if not self.summary_message.strip():
+            raise ValueError("summary_message must not be empty.")
+        if any(not missing_item.strip() for missing_item in self.missing_information_items):
+            raise ValueError("missing_information_items must not contain empty values.")
+        if len(set(self.missing_information_items)) != len(self.missing_information_items):
+            raise ValueError("missing_information_items must not contain duplicate values.")
+        if not isinstance(self.next_state, RequirementDiscoverySessionState):
+            raise ValueError("next_state must be a RequirementDiscoverySessionState value.")
+        if (
+            self.remaining_milestone_issue_count is not None
+            and self.remaining_milestone_issue_count < 0
+        ):
+            raise ValueError("remaining_milestone_issue_count must be zero or greater.")
+
+        if self.status is ImplementationPostMergeDeliveryRoutingStatus.READY:
+            if self.missing_information_items:
+                raise ValueError("missing_information_items must be empty when status is READY.")
+            if self.routing_reason is None:
+                raise ValueError("routing_reason must be provided when status is READY.")
+            if self.remaining_milestone_issue_count is None:
+                raise ValueError(
+                    "remaining_milestone_issue_count must be provided when status is READY."
+                )
+            if self.all_requirements_satisfied is None:
+                raise ValueError(
+                    "all_requirements_satisfied must be provided when status is READY."
+                )
+            expected_next_state = _build_implementation_post_merge_delivery_next_state(
+                self.routing_reason
+            )
+            if self.next_state is not expected_next_state:
+                raise ValueError("next_state must match the provided routing_reason.")
+            if (
+                self.routing_reason
+                is ImplementationPostMergeDeliveryRoutingReason.MORE_ISSUES_NEEDED_FOR_MILESTONE
+            ):
+                if self.remaining_milestone_issue_count <= 0:
+                    raise ValueError(
+                        "remaining_milestone_issue_count must be greater than zero when "
+                        "routing_reason is MORE_ISSUES_NEEDED_FOR_MILESTONE."
+                    )
+                if self.all_requirements_satisfied:
+                    raise ValueError(
+                        "all_requirements_satisfied must be False when routing_reason is "
+                        "MORE_ISSUES_NEEDED_FOR_MILESTONE."
+                    )
+                return
+            if self.remaining_milestone_issue_count != 0:
+                raise ValueError(
+                    "remaining_milestone_issue_count must be zero when routing_reason is "
+                    "MILESTONE_COMPLETED or ALL_REQUIREMENTS_SATISFIED."
+                )
+            if (
+                self.routing_reason
+                is ImplementationPostMergeDeliveryRoutingReason.MILESTONE_COMPLETED
+            ):
+                if self.all_requirements_satisfied:
+                    raise ValueError(
+                        "all_requirements_satisfied must be False when routing_reason is "
+                        "MILESTONE_COMPLETED."
+                    )
+                return
+            if not self.all_requirements_satisfied:
+                raise ValueError(
+                    "all_requirements_satisfied must be True when routing_reason is "
+                    "ALL_REQUIREMENTS_SATISFIED."
+                )
+            return
+
+        if self.routing_reason is not None:
+            raise ValueError("routing_reason must be empty unless status is READY.")
+        if self.remaining_milestone_issue_count is not None:
+            raise ValueError(
+                "remaining_milestone_issue_count must be empty unless status is READY."
+            )
+        if self.all_requirements_satisfied is not None:
+            raise ValueError("all_requirements_satisfied must be empty unless status is READY.")
+
+        if self.status is ImplementationPostMergeDeliveryRoutingStatus.INPUT_REQUIRED:
+            if not self.missing_information_items:
+                raise ValueError(
+                    "missing_information_items must not be empty when status is INPUT_REQUIRED."
+                )
+            if self.next_state is not RequirementDiscoverySessionState.IMPLEMENTATION_PR_MERGED:
+                raise ValueError(
+                    "next_state must be STATE_IMPLEMENTATION_PR_MERGED when status is "
+                    "INPUT_REQUIRED."
+                )
+            return
+
+        if self.missing_information_items:
+            raise ValueError(
+                "missing_information_items must be empty when status is UNSUPPORTED_STATE."
+            )
+
+
+@dataclass(frozen=True, slots=True)
 class ImplementationBlockerDraft:
     """Represents a typed implementation blocker draft for issue comment creation.
 
@@ -3704,6 +3844,116 @@ def build_manager_implementation_review_execution_result(
     )
 
 
+def build_implementation_post_merge_delivery_routing_result(
+    *,
+    session_summary: RequirementDiscoverySessionSummary,
+    remaining_milestone_issue_count: int | None,
+    all_requirements_satisfied: bool | None,
+) -> ImplementationPostMergeDeliveryRoutingResult:
+    """Builds the strict delivery routing result after an implementation PR merge.
+
+    Args:
+        session_summary: Current requirement discovery session snapshot.
+        remaining_milestone_issue_count: Count of implementation issues still needed to
+            complete the current milestone.
+        all_requirements_satisfied: Whether the overall delivery scope is now complete.
+
+    Returns:
+        A typed result describing whether delivery should return to the implementation
+        backlog, the next milestone planning step, or delivery completion.
+
+    Example:
+        result = build_implementation_post_merge_delivery_routing_result(
+            session_summary=session_summary,
+            remaining_milestone_issue_count=0,
+            all_requirements_satisfied=False,
+        )
+        if result.status is ImplementationPostMergeDeliveryRoutingStatus.READY:
+            assert result.routing_reason is not None
+    """
+
+    if (
+        session_summary.current_state
+        is not RequirementDiscoverySessionState.IMPLEMENTATION_PR_MERGED
+    ):
+        return ImplementationPostMergeDeliveryRoutingResult(
+            status=ImplementationPostMergeDeliveryRoutingStatus.UNSUPPORTED_STATE,
+            summary_message=(
+                "Post-merge delivery routing is not supported for workflow state "
+                f"{session_summary.current_state.value}."
+            ),
+            next_state=session_summary.current_state,
+        )
+
+    missing_information_items: list[str] = []
+    if remaining_milestone_issue_count is None:
+        missing_information_items.append("remaining milestone issue count")
+    if all_requirements_satisfied is None:
+        missing_information_items.append("all requirements satisfied flag")
+
+    if missing_information_items:
+        return ImplementationPostMergeDeliveryRoutingResult(
+            status=ImplementationPostMergeDeliveryRoutingStatus.INPUT_REQUIRED,
+            summary_message=(
+                "Remaining milestone issue tracking and requirement completion status are "
+                "required before post-merge delivery routing can continue."
+            ),
+            next_state=RequirementDiscoverySessionState.IMPLEMENTATION_PR_MERGED,
+            missing_information_items=tuple(missing_information_items),
+        )
+
+    if remaining_milestone_issue_count is None or all_requirements_satisfied is None:
+        raise ValueError("Routing inputs must be available after validation.")
+
+    if remaining_milestone_issue_count < 0:
+        raise ValueError("remaining_milestone_issue_count must be zero or greater.")
+    if all_requirements_satisfied and remaining_milestone_issue_count > 0:
+        raise ValueError(
+            "remaining_milestone_issue_count must be zero when all_requirements_satisfied is True."
+        )
+
+    if remaining_milestone_issue_count > 0:
+        return ImplementationPostMergeDeliveryRoutingResult(
+            status=ImplementationPostMergeDeliveryRoutingStatus.READY,
+            summary_message=(
+                "Implementation backlog still contains milestone work, so delivery returns "
+                "to STATE_IMPLEMENTATION_BACKLOG_READY."
+            ),
+            next_state=RequirementDiscoverySessionState.IMPLEMENTATION_BACKLOG_READY,
+            routing_reason=(
+                ImplementationPostMergeDeliveryRoutingReason.MORE_ISSUES_NEEDED_FOR_MILESTONE
+            ),
+            remaining_milestone_issue_count=remaining_milestone_issue_count,
+            all_requirements_satisfied=all_requirements_satisfied,
+        )
+
+    if all_requirements_satisfied:
+        return ImplementationPostMergeDeliveryRoutingResult(
+            status=ImplementationPostMergeDeliveryRoutingStatus.READY,
+            summary_message=(
+                "All tracked requirements are satisfied, so delivery can transition to "
+                "STATE_DELIVERY_COMPLETED."
+            ),
+            next_state=RequirementDiscoverySessionState.DELIVERY_COMPLETED,
+            routing_reason=(
+                ImplementationPostMergeDeliveryRoutingReason.ALL_REQUIREMENTS_SATISFIED
+            ),
+            remaining_milestone_issue_count=remaining_milestone_issue_count,
+            all_requirements_satisfied=all_requirements_satisfied,
+        )
+
+    return ImplementationPostMergeDeliveryRoutingResult(
+        status=ImplementationPostMergeDeliveryRoutingStatus.READY,
+        summary_message=(
+            "The current milestone is complete, so delivery returns to STATE_MILESTONE_PLANNING."
+        ),
+        next_state=RequirementDiscoverySessionState.MILESTONE_PLANNING,
+        routing_reason=ImplementationPostMergeDeliveryRoutingReason.MILESTONE_COMPLETED,
+        remaining_milestone_issue_count=remaining_milestone_issue_count,
+        all_requirements_satisfied=all_requirements_satisfied,
+    )
+
+
 def build_implementation_blocker_result(
     session_summary: RequirementDiscoverySessionSummary,
     engineer_job_input: EngineerJobInput | None,
@@ -4109,6 +4359,21 @@ def _build_manager_implementation_review_next_state(
     if review_decision is ManagerImplementationReviewDecision.REQUEST_CHANGES:
         return RequirementDiscoverySessionState.ENGINEER_CHANGES_REQUESTED
     return RequirementDiscoverySessionState.USER_DECISION_REQUIRED
+
+
+def _build_implementation_post_merge_delivery_next_state(
+    routing_reason: ImplementationPostMergeDeliveryRoutingReason,
+) -> RequirementDiscoverySessionState:
+    """Builds the next delivery workflow state for the post-merge routing reason."""
+
+    if (
+        routing_reason
+        is ImplementationPostMergeDeliveryRoutingReason.MORE_ISSUES_NEEDED_FOR_MILESTONE
+    ):
+        return RequirementDiscoverySessionState.IMPLEMENTATION_BACKLOG_READY
+    if routing_reason is ImplementationPostMergeDeliveryRoutingReason.MILESTONE_COMPLETED:
+        return RequirementDiscoverySessionState.MILESTONE_PLANNING
+    return RequirementDiscoverySessionState.DELIVERY_COMPLETED
 
 
 def _collect_unsupported_implementation_review_check_targets(
