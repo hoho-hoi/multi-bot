@@ -126,6 +126,14 @@ class EngineerJobInputStatus(StrEnum):
     UNSUPPORTED_STATE = "UNSUPPORTED_STATE"
 
 
+class EngineerImplementationReentryInputStatus(StrEnum):
+    """Enumerates outcomes for preparing engineer re-entry input."""
+
+    READY = "READY"
+    INPUT_REQUIRED = "INPUT_REQUIRED"
+    UNSUPPORTED_STATE = "UNSUPPORTED_STATE"
+
+
 class ImplementationPullRequestOpenStatus(StrEnum):
     """Enumerates outcomes for preparing implementation pull request payloads."""
 
@@ -188,6 +196,12 @@ class ManagerImplementationReviewOperation(StrEnum):
     """Enumerates manager operations supported for implementation pull requests."""
 
     REVIEW_ENGINEER_PR = "OP_REVIEW_ENGINEER_PR"
+
+
+class EngineerImplementationReentryOperation(StrEnum):
+    """Enumerates engineer operations supported after manager requested changes."""
+
+    UPDATE_IMPLEMENTATION_PULL_REQUEST = "OP_UPDATE_IMPLEMENTATION_PULL_REQUEST"
 
 
 class ManagerImplementationReviewCheckTarget(StrEnum):
@@ -1448,6 +1462,140 @@ class EngineerExecutionWorkItemContract:
             execution_focus=engineer_job_input.build_initial_execution_focus(),
             provider_name=provider_name,
         )
+
+
+@dataclass(frozen=True, slots=True)
+class EngineerImplementationReentryTransitionContext:
+    """Represents the workflow transition required for engineer re-entry."""
+
+    current_state: RequirementDiscoverySessionState
+    next_state: RequirementDiscoverySessionState
+    required_operation: EngineerImplementationReentryOperation
+
+    def __post_init__(self) -> None:
+        """Validates engineer re-entry transition metadata."""
+
+        if self.current_state is not RequirementDiscoverySessionState.ENGINEER_CHANGES_REQUESTED:
+            raise ValueError("current_state must be STATE_ENGINEER_CHANGES_REQUESTED.")
+        if self.next_state is not RequirementDiscoverySessionState.IMPLEMENTATION_PR_OPEN:
+            raise ValueError("next_state must be STATE_IMPLEMENTATION_PR_OPEN.")
+        if (
+            self.required_operation
+            is not EngineerImplementationReentryOperation.UPDATE_IMPLEMENTATION_PULL_REQUEST
+        ):
+            raise ValueError("required_operation must be OP_UPDATE_IMPLEMENTATION_PULL_REQUEST.")
+
+
+@dataclass(frozen=True, slots=True)
+class EngineerImplementationReentryInput:
+    """Represents the strict input required to resume engineer implementation work.
+
+    Attributes:
+        pull_request_number: Existing implementation pull request number that must be updated.
+        pull_request_title: Existing implementation pull request title that remains open.
+        branch_name: Branch that the engineer must continue updating.
+        base_branch_name: Protected base branch targeted by the implementation pull request.
+        related_issue_identifier: Repository-qualified issue reference that scopes the work.
+        related_issue_title: Title of the implementation issue linked to the pull request.
+        issue_overview: Overview that explains the implementation slice being resumed.
+        acceptance_criteria: Verifiable outcomes that remain in scope for the resumed work.
+        single_pull_request_scope: Explicit boundary that keeps the resumed work in one pull
+            request.
+        requested_changes: Human-readable change requests that must be addressed next.
+        transition_context: Workflow transition metadata for the resumed engineer loop.
+    """
+
+    pull_request_number: int
+    pull_request_title: str
+    branch_name: str
+    base_branch_name: str
+    related_issue_identifier: str
+    related_issue_title: str
+    issue_overview: str
+    acceptance_criteria: tuple[str, ...]
+    single_pull_request_scope: str
+    requested_changes: tuple[str, ...]
+    transition_context: EngineerImplementationReentryTransitionContext
+
+    def __post_init__(self) -> None:
+        """Validates engineer re-entry input."""
+
+        if self.pull_request_number <= 0:
+            raise ValueError("pull_request_number must be greater than zero.")
+        if not self.pull_request_title.strip():
+            raise ValueError("pull_request_title must not be empty.")
+        if not self.branch_name.strip():
+            raise ValueError("branch_name must not be empty.")
+        if not self.base_branch_name.strip():
+            raise ValueError("base_branch_name must not be empty.")
+        if self.base_branch_name != _IMPLEMENTATION_PULL_REQUEST_BASE_BRANCH:
+            raise ValueError(
+                f"base_branch_name must be {_IMPLEMENTATION_PULL_REQUEST_BASE_BRANCH}."
+            )
+        if not self.related_issue_identifier.strip():
+            raise ValueError("related_issue_identifier must not be empty.")
+        if not self.related_issue_title.strip():
+            raise ValueError("related_issue_title must not be empty.")
+        if not self.issue_overview.strip():
+            raise ValueError("issue_overview must not be empty.")
+        if not self.acceptance_criteria:
+            raise ValueError("acceptance_criteria must not be empty.")
+        if any(
+            not acceptance_criterion.strip() for acceptance_criterion in self.acceptance_criteria
+        ):
+            raise ValueError("acceptance_criteria must not contain empty values.")
+        if len(set(self.acceptance_criteria)) != len(self.acceptance_criteria):
+            raise ValueError("acceptance_criteria must not contain duplicate values.")
+        if not self.single_pull_request_scope.strip():
+            raise ValueError("single_pull_request_scope must not be empty.")
+        if not self.requested_changes:
+            raise ValueError("requested_changes must not be empty.")
+        if any(not requested_change.strip() for requested_change in self.requested_changes):
+            raise ValueError("requested_changes must not contain empty values.")
+        if len(set(self.requested_changes)) != len(self.requested_changes):
+            raise ValueError("requested_changes must not contain duplicate values.")
+
+
+@dataclass(frozen=True, slots=True)
+class EngineerImplementationReentryInputResult:
+    """Represents whether engineer re-entry can resume from requested changes."""
+
+    status: EngineerImplementationReentryInputStatus
+    summary_message: str
+    missing_information_items: tuple[str, ...] = ()
+    reentry_input: EngineerImplementationReentryInput | None = None
+
+    def __post_init__(self) -> None:
+        """Validates engineer re-entry result consistency."""
+
+        if not self.summary_message.strip():
+            raise ValueError("summary_message must not be empty.")
+        if any(not missing_item.strip() for missing_item in self.missing_information_items):
+            raise ValueError("missing_information_items must not contain empty values.")
+        if len(set(self.missing_information_items)) != len(self.missing_information_items):
+            raise ValueError("missing_information_items must not contain duplicate values.")
+
+        if self.status is EngineerImplementationReentryInputStatus.READY:
+            if self.reentry_input is None:
+                raise ValueError("reentry_input must be provided when status is READY.")
+            if self.missing_information_items:
+                raise ValueError("missing_information_items must be empty when status is READY.")
+            return
+
+        if self.reentry_input is not None:
+            raise ValueError("reentry_input must be empty unless status is READY.")
+
+        if self.status is EngineerImplementationReentryInputStatus.INPUT_REQUIRED:
+            if not self.missing_information_items:
+                raise ValueError(
+                    "missing_information_items must not be empty when status is INPUT_REQUIRED."
+                )
+            return
+
+        if self.missing_information_items:
+            raise ValueError(
+                "missing_information_items must be empty when status is UNSUPPORTED_STATE."
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -3840,6 +3988,130 @@ def build_manager_implementation_review_execution_result(
             pull_request_title=review_input.pull_request_title,
             review_decision=decision_result.decision,
             review_body=decision_result.review_body_draft,
+        ),
+    )
+
+
+def build_engineer_implementation_reentry_input_result(
+    *,
+    session_summary: RequirementDiscoverySessionSummary,
+    review_input: ManagerImplementationReviewInput | None,
+    execution_result: ManagerImplementationReviewExecutionResult | None,
+    requested_changes: tuple[str, ...],
+) -> EngineerImplementationReentryInputResult:
+    """Builds the strict engineer re-entry input after manager requested changes.
+
+    Args:
+        session_summary: Current delivery workflow session snapshot.
+        review_input: Strict manager review input captured for the implementation pull request.
+        execution_result: Execution result produced from the manager implementation review.
+        requested_changes: Requested changes that the engineer must address before updating the
+            pull request.
+
+    Returns:
+        A typed result describing whether engineer re-entry can resume immediately.
+    """
+
+    if (
+        session_summary.current_state
+        is not RequirementDiscoverySessionState.ENGINEER_CHANGES_REQUESTED
+    ):
+        return EngineerImplementationReentryInputResult(
+            status=EngineerImplementationReentryInputStatus.UNSUPPORTED_STATE,
+            summary_message=(
+                "Engineer re-entry input is not supported for workflow state "
+                f"{session_summary.current_state.value}."
+            ),
+        )
+
+    missing_information_items: list[str] = []
+    if review_input is None:
+        missing_information_items.append("manager implementation review input")
+    if execution_result is None:
+        missing_information_items.append("manager implementation review execution result")
+    if not requested_changes:
+        missing_information_items.append("requested changes")
+
+    if missing_information_items:
+        return EngineerImplementationReentryInputResult(
+            status=EngineerImplementationReentryInputStatus.INPUT_REQUIRED,
+            summary_message=(
+                "Manager review metadata and requested changes are required before engineer "
+                "re-entry can resume."
+            ),
+            missing_information_items=tuple(missing_information_items),
+        )
+
+    if review_input is None or execution_result is None:
+        raise ValueError("Engineer re-entry inputs must be available after validation.")
+
+    if execution_result.status is not ManagerImplementationReviewExecutionStatus.READY:
+        return EngineerImplementationReentryInputResult(
+            status=EngineerImplementationReentryInputStatus.UNSUPPORTED_STATE,
+            summary_message=(
+                "Engineer re-entry input requires a READY manager implementation review "
+                "execution result."
+            ),
+        )
+
+    if (
+        execution_result.next_state
+        is not RequirementDiscoverySessionState.ENGINEER_CHANGES_REQUESTED
+    ):
+        return EngineerImplementationReentryInputResult(
+            status=EngineerImplementationReentryInputStatus.UNSUPPORTED_STATE,
+            summary_message=(
+                "Engineer re-entry input only supports manager review execution results that "
+                "transition to STATE_ENGINEER_CHANGES_REQUESTED."
+            ),
+        )
+
+    review_execution_payload = execution_result.review_execution_payload
+    if review_execution_payload is None:
+        return EngineerImplementationReentryInputResult(
+            status=EngineerImplementationReentryInputStatus.INPUT_REQUIRED,
+            summary_message=(
+                "A review execution payload is required to resume engineer work from requested "
+                "changes."
+            ),
+            missing_information_items=("manager implementation review execution payload",),
+        )
+
+    if (
+        review_execution_payload.review_decision
+        is not ManagerImplementationReviewDecision.REQUEST_CHANGES
+    ):
+        return EngineerImplementationReentryInputResult(
+            status=EngineerImplementationReentryInputStatus.UNSUPPORTED_STATE,
+            summary_message=(
+                "Engineer re-entry input only supports implementation reviews that requested "
+                "changes."
+            ),
+        )
+
+    return EngineerImplementationReentryInputResult(
+        status=EngineerImplementationReentryInputStatus.READY,
+        summary_message=(
+            "Prepared the strict engineer re-entry input for the implementation pull request."
+        ),
+        reentry_input=EngineerImplementationReentryInput(
+            pull_request_number=review_execution_payload.pull_request_number,
+            pull_request_title=review_execution_payload.pull_request_title,
+            branch_name=review_input.branch_name,
+            base_branch_name=review_input.base_branch_name,
+            related_issue_identifier=review_input.related_issue_identifier,
+            related_issue_title=review_input.related_issue_title,
+            issue_overview=review_input.issue_overview,
+            acceptance_criteria=review_input.acceptance_criteria,
+            single_pull_request_scope=review_input.single_pull_request_scope,
+            requested_changes=requested_changes,
+            transition_context=EngineerImplementationReentryTransitionContext(
+                current_state=RequirementDiscoverySessionState.ENGINEER_CHANGES_REQUESTED,
+                next_state=RequirementDiscoverySessionState.IMPLEMENTATION_PR_OPEN,
+                required_operation=(
+                    EngineerImplementationReentryOperation.UPDATE_IMPLEMENTATION_PULL_REQUEST
+                ),
+            ),
         ),
     )
 
